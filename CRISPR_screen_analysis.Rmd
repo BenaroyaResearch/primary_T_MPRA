@@ -1,0 +1,1387 @@
+---
+title: "SCEPTRE analysis of Ray lab CRISPR QTL"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+This is the analysis script for the v2 and v3 CRISPR QTL data from the Ray lab. The data was processed using the SCEPTRE pipeline.
+For the v3 data, hashtags for donor identity are available. Cells are assigned to a donor based on the hashtag expression using Seurat.
+This information can then be used with SCEPTRE as a covariate. In case of the v2 data, hashtags were not available and SCEPTRE
+was not provided with any additional covariates.
+
+It is not recommended to render/knit this document as it will take a long time to run. Instead, run the code chunks individually.
+
+```{r setup libraries, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(dplyr)
+library(ggplot2); theme_set(
+  theme_bw(20) +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_rect(colour="black", fill=NA, size=1),
+          axis.text=element_text(colour="black"),
+          axis.ticks=element_line(colour="black"),
+          legend.key = element_blank(),
+          strip.text.x = element_text(size = 14,margin = margin( b = 2, t = 2) ),
+            strip.background = element_rect(fill="white", colour="black")))
+
+library(stringr)
+library(readxl)
+library(kableExtra)
+library(RColorBrewer)
+library(annotables)
+#devtools::install_github("stephenturner/annotables")
+library(ComplexHeatmap)
+library(ggpubr) #Also for ggarrange
+library(umap)
+library(forcats)
+library(ggalluvial)
+library(Seurat)
+library(broom)
+library(tidyr)
+library(data.table)
+library(GGally)
+library(UpSetR)
+
+library(sceptre)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(rtracklayer)
+
+
+opts_chunk$set(fig.width=6, fig.height=4.0, cache = TRUE, echo=FALSE, warning=FALSE, message=FALSE, cache.lazy = FALSE, results='hide')
+opts_knit$set(root.dir = "./")
+
+options(stringsAsFactors = FALSE)
+
+sessionInfo()
+
+```
+
+
+```{r session info overview, eval=FALSE}
+> sessionInfo()
+R version 4.2.1 (2022-06-23)
+Platform: x86_64-pc-linux-gnu (64-bit)
+Running under: Ubuntu 20.04.5 LTS
+
+Matrix products: default
+BLAS:   /usr/lib/x86_64-linux-gnu/blas/libblas.so.3.9.0
+LAPACK: /usr/lib/x86_64-linux-gnu/lapack/liblapack.so.3.9.0
+
+locale:
+ [1] LC_CTYPE=en_US.UTF-8       LC_NUMERIC=C              
+ [3] LC_TIME=en_US.UTF-8        LC_COLLATE=en_US.UTF-8    
+ [5] LC_MONETARY=en_US.UTF-8    LC_MESSAGES=en_US.UTF-8   
+ [7] LC_PAPER=en_US.UTF-8       LC_NAME=C                 
+ [9] LC_ADDRESS=C               LC_TELEPHONE=C            
+[11] LC_MEASUREMENT=en_US.UTF-8 LC_IDENTIFICATION=C       
+
+attached base packages:
+[1] stats4    grid      stats     graphics  grDevices utils     datasets 
+[8] methods   base     
+
+other attached packages:
+ [1] rtracklayer_1.58.0    GenomicRanges_1.50.2  GenomeInfoDb_1.34.9  
+ [4] org.Hs.eg.db_3.16.0   AnnotationDbi_1.60.2  IRanges_2.32.0       
+ [7] S4Vectors_0.36.2      Biobase_2.58.0        BiocGenerics_0.44.0  
+[10] sceptre_0.10.0        UpSetR_1.4.0          GGally_2.1.2         
+[13] data.table_1.15.4     tidyr_1.3.1           broom_1.0.5          
+[16] Seurat_5.0.0          SeuratObject_5.0.1    sp_2.1-3             
+[19] ggalluvial_0.12.5     forcats_1.0.0         umap_0.2.10.0        
+[22] ggpubr_0.6.0          ComplexHeatmap_2.14.0 annotables_0.2.0     
+[25] RColorBrewer_1.1-3    kableExtra_1.3.4      readxl_1.4.3         
+[28] stringr_1.5.1         ggplot2_3.5.1         dplyr_1.1.4          
+[31] knitr_1.45           
+
+loaded via a namespace (and not attached):
+  [1] utf8_1.2.4                  R.utils_2.12.2             
+  [3] spatstat.explore_3.2-6      reticulate_1.35.0          
+  [5] tidyselect_1.2.1            RSQLite_2.3.3              
+  [7] htmlwidgets_1.6.4           BiocParallel_1.32.6        
+  [9] Rtsne_0.17                  munsell_0.5.1              
+ [11] ragg_1.2.6                  codetools_0.2-19           
+ [13] ica_1.0-3                   future_1.33.1              
+ [15] miniUI_0.1.1.1              withr_3.0.0                
+ [17] spatstat.random_3.2-2       colorspace_2.1-0           
+ [19] progressr_0.14.0            rstudioapi_0.15.0          
+ [21] ROCR_1.0-11                 ggsignif_0.6.4             
+ [23] tensor_1.5                  listenv_0.9.1              
+ [25] labeling_0.4.3              MatrixGenerics_1.10.0      
+ [27] GenomeInfoDbData_1.2.9      polyclip_1.10-6            
+ [29] farver_2.1.2                bit64_4.0.5                
+ [31] parallelly_1.36.0           vctrs_0.6.5                
+ [33] generics_0.1.3              xfun_0.41                  
+ [35] R6_2.5.1                    doParallel_1.0.17          
+ [37] clue_0.3-65                 hdf5r_1.3.8                
+ [39] DelayedArray_0.24.0         bitops_1.0-7               
+ [41] cachem_1.0.8                spatstat.utils_3.0-4       
+ [43] reshape_0.8.9               BiocIO_1.8.0               
+ [45] promises_1.2.1              scales_1.3.0               
+ [47] gtable_0.3.5                globals_0.16.2             
+ [49] goftest_1.2-3               spam_2.10-0                
+ [51] rlang_1.1.3                 systemfonts_1.0.5          
+ [53] GlobalOptions_0.1.2         splines_4.2.1              
+ [55] rstatix_0.7.2               lazyeval_0.2.2             
+ [57] spatstat.geom_3.2-8         yaml_2.3.8                 
+ [59] reshape2_1.4.4              abind_1.4-5                
+ [61] backports_1.4.1             httpuv_1.6.14              
+ [63] tools_4.2.1                 ellipsis_0.3.2             
+ [65] rcartocolor_2.1.1           ggridges_0.5.6             
+ [67] Rcpp_1.0.12                 plyr_1.8.9                 
+ [69] zlibbioc_1.44.0             RCurl_1.98-1.14            
+ [71] purrr_1.0.2                 openssl_2.1.1              
+ [73] deldir_2.0-2                pbapply_1.7-2              
+ [75] GetoptLong_1.0.5            cowplot_1.1.3              
+ [77] zoo_1.8-12                  SummarizedExperiment_1.28.0
+ [79] ggrepel_0.9.5               cluster_2.1.4              
+ [81] magrittr_2.0.3              RSpectra_0.16-1            
+ [83] scattermore_1.2             circlize_0.4.15            
+ [85] lmtest_0.9-40               RANN_2.6.1                 
+ [87] fitdistrplus_1.1-11         matrixStats_1.2.0          
+ [89] patchwork_1.2.0             mime_0.12                  
+ [91] evaluate_0.23               xtable_1.8-4               
+ [93] XML_3.99-0.15               fastDummies_1.7.3          
+ [95] gridExtra_2.3               shape_1.4.6                
+ [97] compiler_4.2.1              tibble_3.2.1               
+ [99] KernSmooth_2.23-20          crayon_1.5.2               
+[101] R.oo_1.25.0                 htmltools_0.5.7            
+[103] later_1.3.2                 DBI_1.1.3                  
+[105] MASS_7.3-60                 Matrix_1.6-5               
+[107] car_3.1-2                   cli_3.6.2                  
+[109] R.methodsS3_1.8.2           parallel_4.2.1             
+[111] dotCall64_1.1-1             igraph_1.5.1               
+[113] pkgconfig_2.0.3             GenomicAlignments_1.34.1   
+[115] plotly_4.10.4               spatstat.sparse_3.0-3      
+[117] xml2_1.3.5                  foreach_1.5.2              
+[119] svglite_2.1.2               XVector_0.38.0             
+[121] webshot_0.5.5               BH_1.84.0-0                
+[123] rvest_1.0.3                 digest_0.6.34              
+[125] sctransform_0.4.1           RcppAnnoy_0.0.22           
+[127] Biostrings_2.66.0           spatstat.data_3.0-4        
+[129] rmarkdown_2.25              cellranger_1.1.0           
+[131] leiden_0.4.3.1              uwot_0.1.16                
+[133] restfulr_0.0.15             Rsamtools_2.14.0           
+[135] shiny_1.8.0                 rjson_0.2.21               
+[137] lifecycle_1.0.4             nlme_3.1-163               
+[139] jsonlite_1.8.8              carData_3.0-5              
+[141] viridisLite_0.4.2           askpass_1.2.0              
+[143] fansi_1.0.6                 pillar_1.9.0               
+[145] lattice_0.20-45             KEGGREST_1.38.0            
+[147] fastmap_1.1.1               httr_1.4.7                 
+[149] survival_3.5-7              glue_1.7.0                 
+[151] png_0.1-8                   iterators_1.0.14           
+[153] bit_4.0.5                   stringi_1.8.3              
+[155] blob_1.2.4                  textshaping_0.3.7          
+[157] RcppHNSW_0.5.0              memoise_2.0.1              
+[159] irlba_2.3.5.1               future.apply_1.11.1 
+
+```
+
+```{r set up directories, cache = TRUE}
+baseDir <- "./"
+dataDir <- file.path(baseDir, "data")
+plotDir <- file.path(baseDir, "plots")
+tableDir <- file.path(baseDir, "tables")
+
+dir.create(dataDir, showWarnings = FALSE, recursive = TRUE)
+dir.create(plotDir, showWarnings = FALSE, recursive = TRUE)
+dir.create(tableDir, showWarnings = FALSE, recursive = TRUE)
+```
+
+
+```{r add directories for cellranger outputs}
+# the data directories to the two data sets that were analyzed
+cellranger_v3 = "./cellranger_output_v3"
+cellranger_v2 = "./cellranger_output_v2"
+
+sceptreOutputDir = "./sceptre_output"
+
+dir.create(sceptreOutputDir, showWarnings = FALSE, recursive = TRUE)
+
+```
+
+# Seurat to obtain covariates for Sceptre analysis
+
+## Initialize Seurat
+
+```{r read_gex_data}
+
+CRISPRQTLData <- Read10X_h5(file.path(cellranger_v3, "sample_filtered_feature_bc_matrix.h5") )
+
+seurat <- CreateSeuratObject(counts = CRISPRQTLData$`Gene Expression`, min.cells = 3,
+                            min.features = 100)
+
+CRISPRi_assay <- CreateAssay5Object(counts = CRISPRQTLData$`CRISPR Guide Capture`)
+
+seurat[["gRNA"]] = CRISPRi_assay
+
+Layers(seurat)
+Assays(seurat)
+
+rownames(seurat[["gRNA"]])
+
+DefaultAssay(seurat)
+
+seurat[["percentMT"]] <- PercentageFeatureSet(seurat, pattern = "^MT-")
+
+```
+
+```{r add_hashtag_data}
+
+htData <- CRISPRQTLData$`Antibody Capture`
+
+#Subset to cells in seurat object
+keepCells <- colnames(seurat)
+htData <- htData[,keepCells]
+
+htVariables <- c("CRISPR_QTLv3_1",
+                 "CRISPR_QTLv3_2",
+                 "CRISPR_QTLv3_3",
+                 "CRISPR_QTLv3_4",
+                 "CRISPR_QTLv3_5",
+                 "CRISPR_QTLv3_6")
+
+#Add to seurat object
+seurat[["HT"]] <- CreateAssayObject(htData[htVariables,])
+```
+
+## Check that all guides are present in the data set
+```{r filter_guides_cells}
+guideData <- CRISPRQTLData$`CRISPR Guide Capture`
+
+guideDF <- as_tibble(guideData) %>%
+  mutate(Guide=rownames(guideData)) %>%
+  pivot_longer(-Guide,
+               names_to="Cell",
+               values_to="UMICount")
+
+#Identify guides that are not found in any cells
+
+umiFilter = 5
+# counting the cells that have at least umiFilter UMIs for a given guide.
+# cellsWithPerturbation <- rowSums(guideData > umiFilter) %>%  # hannahs original code
+cellsWithPerturbation <- rowSums(guideData > umiFilter) %>% # what cells have at least 5 UMIs for a given guide
+  as.table() %>%
+  as.data.frame() %>%
+  dplyr::rename(Guide = Var1) %>%
+  dplyr::rename(N_Cells_With_Perturbation = Freq)
+
+write.csv(cellsWithPerturbation,
+          file = file.path(tableDir, "Novogene_CountsOfCellsWithPerturbationByGuide.csv"),
+          row.names = F)
+any(cellsWithPerturbation$N_Cells_With_Perturbation == 0)
+
+# great, no 0 counts, that means that the hashtag sequences were correct
+
+```
+
+```{r some cleanup}
+
+#Clean
+remove(htData)
+
+```
+
+##Gene expression quality control
+
+### Plots of the number of features detected per library
+
+The following plots show the distribution of features (genes) detected for cells within a sample. High features may indicate a multi-plet rather than a single cell; low feature counts may indicate a low quality cell. 
+
+```{r quality_check}
+
+#Select QC cutoffs
+
+nFeatureLow <-500 
+nFeatureHigh <- 7000
+pctMtCutoff <- 10
+
+
+#Look at distributions of quality features
+
+nFeatureHistogram <- seurat@meta.data %>%
+  ggplot(aes(x = nFeature_RNA))+
+  geom_histogram() +
+  geom_vline(xintercept = nFeatureLow) +
+  geom_vline(xintercept = nFeatureHigh) +
+  xlim(c(0,10000)) +
+  labs(x = "Number of RNA features (genes)",
+       y = "Number of cells") 
+  
+# pdf(file.path(plotDir,
+              # "HistogramNFeature.pdf"),
+    # height = 6,
+    # width = 10)
+
+print(nFeatureHistogram)
+
+# invisible(dev.off())
+
+```
+
+### Plots of the percent mitochondrial reads per library
+
+The following plots show the percent of features that mapped to mitochondrial genes. High percentages can indicate a poor quality or dying cell. 
+
+```{r plot_pct_mito, fig.height = 3, fig.width=3}
+
+#Look at distributions of quality features
+
+pctMitoHistograms <- seurat@meta.data %>%
+  ggplot(aes(x = percentMT))+
+  geom_histogram() +
+  geom_vline(xintercept = pctMtCutoff) +
+  labs(x = "% mito reads",
+       y = "Number of cells") +
+  xlim(c(0,20)) 
+  
+
+# pdf(file.path(plotDir,
+              # "HistogramPctMito.pdf"),
+    # height = 6,
+    # width = 10)
+
+pctMitoHistograms
+
+# invisible(dev.off())
+```
+
+```{r make_qc_cuts, results = "show"}
+
+seurat$qcPass <- seurat$nFeature_RNA > nFeatureLow & seurat$nFeature_RNA < nFeatureHigh & seurat$percentMT < pctMtCutoff
+
+seuratQC <- subset(seurat, 
+                   subset = (qcPass == TRUE))
+
+pctPass <- round(ncol(seuratQC)/ncol(seurat)*100,2)
+
+#Clean up 
+# remove(seurat)
+
+```
+
+## Examine hashtags
+
+```{r hist_and_biaxial_HT_plots}
+
+# Dont need to run this section until we get hashtags for all samples
+# ---------------------------------------------
+seuratQC <- NormalizeData(object = seuratQC,
+                                    verbose = FALSE,
+                                    normalization.method = "CLR",
+                                    margin = 2,
+                                    assay = "HT",
+                          )
+
+DefaultAssay(seuratQC) <- "HT"
+
+htVariables <- rownames(seuratQC)
+htDF <- FetchData(seuratQC,
+                  vars = c(htVariables))
+
+png(file.path(plotDir,
+              "Scatterplots_HTExpression_V3.png"),
+    height = 1000,
+    width = 1200)
+
+ggpairs(htDF[sample(1:nrow(htDF)), ],
+        #columns = 1:5,
+        aes(alpha = 0.4))
+
+invisible(dev.off())
+
+
+```
+
+
+```{r manually_id_filter_hashtag_doublets}
+
+# #Usually performs better for human samples than hto demux
+htCutoff <- 1.5
+
+hashtagHistograms <- htDF %>%
+  pivot_longer(cols = all_of(htVariables),
+              names_to = "ht",
+              values_to = "counts") %>%
+  ggplot(aes(x = counts))+
+  geom_histogram()+
+  geom_vline(xintercept = htCutoff,
+             color = "red")+
+  labs(x = "hashtag expression",
+       y = "Number of cells")+
+  facet_wrap(~ht,
+             ncol = 3)
+# 
+# pdf(file.path(plotDir,
+#               "HistogramsHashtags.pdf"),
+#     width = 10,
+#     height = 6)
+# 
+print(hashtagHistograms)
+# 
+# invisible(dev.off())
+# 
+
+#Count how many hashtags are positive for each barcode
+htDF$nCells <- rowSums(htDF>htCutoff)
+# 
+htDF <- htDF %>%
+  dplyr::mutate(manualHT = case_when(nCells > 1 ~ "Multiplet",
+                                     nCells == 0 ~ "Negative",
+                                     `CRISPR-QTLv3-1` > htCutoff ~ "CRISPR-QTLv3-1",
+                                     `CRISPR-QTLv3-2` > htCutoff ~ "CRISPR-QTLv3-2",
+                                     `CRISPR-QTLv3-3` > htCutoff ~ "CRISPR-QTLv3-3",
+                                     `CRISPR-QTLv3-4` > htCutoff ~ "CRISPR-QTLv3-4",
+                                     `CRISPR-QTLv3-5` > htCutoff ~ "CRISPR-QTLv3-5",
+                                     `CRISPR-QTLv3-6` > htCutoff ~ "CRISPR-QTLv3-6"))
+
+#Check ht calls. Many things are multiplets according to this 
+table(htDF$manualHT)
+
+png(file.path(plotDir,
+              "Scatterplots_HTExpression_ManualDemux_V3.png"),
+    height = 1500,
+    width = 1700)
+
+
+ggpairs(htDF[sample(1:nrow(htDF)), ],
+        columns = 1:length(htVariables),
+        aes(color = manualHT,
+            fill = manualHT,
+            alpha = 0.4))
+
+invisible(dev.off())
+
+seuratQC@meta.data <- seuratQC@meta.data %>%
+  dplyr::mutate(htDemux = htDF$manualHT)
+
+#Check with additional plots
+
+pdf(file.path(plotDir,
+              "Ridgeplots_HTExpression_ManualDemux_V3.pdf"),
+    height = 6,
+    width = 10)
+
+RidgePlot(seuratQC, 
+          assay = "HT", 
+          features = htVariables, 
+          group.by = "htDemux",
+          ncol = 3) &
+  labs(x = "Hashtag expression",
+       y = "Assigned demux group") 
+
+invisible(dev.off())
+
+DefaultAssay(seuratQC) <- "HT"
+seuratQC <- ScaleData(seuratQC, features = rownames(htVariables),
+    verbose = FALSE)
+seuratQC <- RunPCA(seuratQC, features = htVariables, approx = FALSE)
+seuratQC <- RunUMAP(seuratQC, dims = 1:6)
+DimPlot(seuratQC,
+        group.by = "htDemux")
+
+```
+
+```{r subset_to_singlets}
+
+seuratSinglets <- subset(seuratQC,
+                   subset = (htDemux %in% htVariables))
+
+pctSinglets <- round(ncol(seuratSinglets)/ncol(seuratQC)*100,2)
+
+#Clean up
+remove(seuratQC)
+remove(CRISPRQTLData)
+
+DefaultAssay(seuratSinglets) <- "RNA"
+
+```
+
+## Explore dimensionality reduction and clustering
+
+```{r normalize and determine dimensionality}
+
+DefaultAssay(seuratSinglets) <- "RNA"
+
+seuratSinglets <- NormalizeData(object = seuratSinglets, verbose = TRUE)
+seuratSinglets <- FindVariableFeatures(object = seuratSinglets, 
+        selection.method = "vst", nfeatures = 2000, verbose = TRUE)
+
+seuratSinglets <- ScaleData(object = seuratSinglets, verbose = TRUE)
+seuratSinglets <- RunPCA(object = seuratSinglets, npcs = 30, verbose = TRUE)
+#ElbowPlot(seuratSinglets)
+
+ElbowPlot(seuratSinglets) # 15/20 pcs look like a good cutoff
+
+seuratSinglets<- FindNeighbors(seuratSinglets, dims = 1:20)
+seuratSinglets <- FindClusters(seuratSinglets, resolution = 0.3)
+
+seuratSinglets <- RunUMAP(object = seuratSinglets, reduction = "pca",
+    dims = 1:20)
+
+DimPlot(seuratSinglets, reduction = "umap")
+
+htColors <- rcartocolor::carto_pal(6, "Vivid")
+names(htColors) <- htVariables
+
+png(file.path(plotDir,
+              "UMAP_HTDemux_V3.png"),
+    height = 400,
+    width = 600)
+
+DimPlot(seuratSinglets, 
+        group.by = "htDemux",
+        reduction = "umap") +
+  scale_color_manual(values = htColors) +
+  theme(aspect.ratio = 1)
+
+invisible(dev.off())
+
+#Facet by donor for a different view
+
+png(file.path(plotDir,
+              "UMAP_HTDemux_Facets_V3.png"),
+    height = 600,
+    width = 1000)
+
+DimPlot(seuratSinglets, 
+        group.by = "htDemux",
+        reduction = "umap") &
+  scale_color_manual(values = htColors) &
+  theme(aspect.ratio = 1) &
+  facet_wrap(~htDemux,
+             ncol = 3)
+
+invisible(dev.off())
+
+
+```
+
+```{r annotate_with_donor_ID}
+
+#Annotate with donor ID
+
+seuratSinglets$donorID <- case_when(seuratSinglets$htDemux %in% c("CRISPR-QTLv3-1",
+                                                                  "CRISPR-QTLv3-2",
+                                                                  "CRISPR-QTLv3-3",
+                                                                  "CRISPR-QTLv3-4") ~ "Donor001",
+                                    seuratSinglets$htDemux %in% c("CRISPR-QTLv3-5",
+                                                                  "CRISPR-QTLv3-6") ~ "Donor110")
+
+donorColors <- c("Donor001" <- "red",
+                 "Donor110" <- "darkcyan")
+
+DimPlot(seuratSinglets, 
+        group.by = "donorID",
+        reduction = "umap") +
+  scale_color_manual(values = donorColors) +
+  theme(aspect.ratio = 1)
+
+png(file.path(plotDir,
+              "UMAP_DonorID_V3.png"),
+    height = 400,
+    width = 600)
+
+DimPlot(seuratSinglets, 
+        group.by = "donorID",
+        reduction = "umap") +
+  scale_color_manual(values = donorColors) +
+  theme(aspect.ratio = 1)
+
+invisible(dev.off())
+
+DimPlot(seuratSinglets, 
+        group.by = "donorID",
+        reduction = "umap") +
+  scale_color_manual(values = donorColors) +
+  theme(aspect.ratio = 1)+
+  facet_wrap(~donorID,
+             ncol = 2)
+
+png(file.path(plotDir,
+              "UMAP_DonorIDFaceted_V3.png"),
+    height = 400,
+    width = 1000)
+
+DimPlot(seuratSinglets, 
+        group.by = "donorID",
+        reduction = "umap") +
+  scale_color_manual(values = donorColors) +
+  theme(aspect.ratio = 1)+
+  facet_wrap(~donorID,
+             ncol = 2)
+
+invisible(dev.off())
+
+```
+
+## Integrate to remove batch effects
+
+```{r integrate_to_remove_batch_effect}
+
+# Integrate by HT assignment
+
+seuratSinglets[["RNA"]] <- split(seuratSinglets[["RNA"]], f = seuratSinglets$htDemux)
+
+#This will normalize and find variable features for each layer separately. A consensus set of variable features is automatically identified by Seurat
+seuratSinglets <- NormalizeData(seuratSinglets)
+seuratSinglets <- FindVariableFeatures(seuratSinglets)
+seuratSinglets <- ScaleData(seuratSinglets)
+seuratSinglets <- RunPCA(seuratSinglets)
+
+```
+
+```{r integrate}
+
+options(future.globals.maxSize= 1e10)
+
+seuratSinglets <- IntegrateLayers(
+  object = seuratSinglets, method = RPCAIntegration,
+  orig.reduction = "pca", new.reduction = "integrated.rpca",
+  verbose = FALSE
+)
+
+```
+
+```{r process_integration}
+
+# re-join layers after integration
+seuratSinglets[["RNA"]] <- JoinLayers(seuratSinglets[["RNA"]])
+
+seuratSinglets <- FindNeighbors(seuratSinglets, reduction = "integrated.rpca", dims = 1:30)
+seuratSinglets <- FindClusters(seuratSinglets, resolution = 0.3)
+
+seuratSinglets <- RunUMAP(seuratSinglets, dims = 1:30, reduction = "integrated.rpca")
+
+#saveRDS(seuratSinglets, file.path(dataDir, "SeuratSinglets_V3.RDS"))
+
+#seuratSinglets <- readRDS(file.path(dataDir, "SeuratSinglets_V3.RDS"))
+
+```
+
+```{r plot_after_integration}
+DimPlot(seuratSinglets, 
+        group.by = "htDemux",
+        reduction = "umap") +
+  scale_color_manual(values = htColors) +
+  theme(aspect.ratio = 1)
+
+png(file.path(plotDir,
+              "UMAP_HTDemux_AfterIntegration_V3.png"),
+    height = 400,
+    width = 600)
+
+DimPlot(seuratSinglets, 
+        group.by = "htDemux",
+        reduction = "umap") +
+  scale_color_manual(values = htColors) +
+  theme(aspect.ratio = 1)
+
+invisible(dev.off())
+
+#Facet by donor for a different view
+
+DimPlot(seuratSinglets, 
+        group.by = "htDemux",
+        reduction = "umap") &
+  scale_color_manual(values = htColors) &
+  theme(aspect.ratio = 1) &
+  facet_wrap(~htDemux,
+             ncol = 3)
+
+png(file.path(plotDir,
+              "UMAP_HTDemux_Facets_AfterIntegration_V3.png"),
+    height = 600,
+    width = 1000)
+
+DimPlot(seuratSinglets, 
+        group.by = "htDemux",
+        reduction = "umap") &
+  scale_color_manual(values = htColors) &
+  theme(aspect.ratio = 1) &
+  facet_wrap(~htDemux,
+             ncol = 3)
+
+invisible(dev.off())
+
+DimPlot(seuratSinglets, 
+        group.by = "donorID",
+        reduction = "umap") &
+  scale_color_manual(values = donorColors) &
+  theme(aspect.ratio = 1) &
+  facet_wrap(~donorID,
+             ncol = 2)
+
+png(file.path(plotDir,
+              "UMAP_DonorID_Facets_AfterIntegration_V3.png"),
+    height = 600,
+    width = 1000)
+
+DimPlot(seuratSinglets, 
+        group.by = "donorID",
+        reduction = "umap") &
+  scale_color_manual(values = donorColors) &
+  theme(aspect.ratio = 1) &
+  facet_wrap(~donorID,
+             ncol = 2)
+
+invisible(dev.off())
+
+#Check clusters
+
+DimPlot(seuratSinglets, 
+        group.by = "seurat_clusters",
+        reduction = "umap") +
+  theme(aspect.ratio = 1)
+
+```
+
+
+## Extract covariates from Seurat
+
+```{r get data frame with donorIdentities}
+# cluster identities of the cells that survived the QC
+donorIds = as.data.frame(seuratSinglets$donorID)
+
+names(donorIds) <- "donorId"
+donorIds$cellID = rownames(donorIds)
+
+# get all cells (including those that did not survive the QC)
+donorIdsAll = data.frame(cellID = colnames(seurat))
+
+# merge the two dataframes
+donorIdsAll = merge(donorIdsAll, donorIds, by = "cellID", all.x = TRUE)
+
+# assign a cluster to the cells that did not survive the QC
+donorIdsAll$donorId[is.na(donorIdsAll$donorId)] = "Y"
+
+rownames(donorIdsAll) <- donorIdsAll$cellID
+donorIdsAll$cellID <- NULL
+
+donorIdsAll$donorId = as.factor(donorIdsAll$donorId)
+table(donorIdsAll$donorId)
+
+write.csv(donorIdsAll, file.path(tableDir, "donorIdsAll.csv"))
+
+```
+
+# v3 data analysis with sceptre
+
+## Set up gRNA data
+
+```{r set up guide RNA data for sceptre for v3}
+
+feature_reference = read.csv(file.path(cellranger_v3, "./CRISPR_QTL_v3_feature_reference.csv"), header = TRUE)
+feature_reference = dplyr::filter(feature_reference, feature_type == "CRISPR Guide Capture")
+
+negativeControlsDF = data.frame(grna_id = dplyr::filter(feature_reference, grepl("NT_CONTROL", id))$id,
+                                grna_target = "non-targeting", # negative controls must be named "non-targeting" in the grna_target column
+                                chrom = NA,
+                                start = NA,
+                                end = NA,
+                                missing = NA)
+
+
+grna_targets_v3 = data.frame(grna_id = feature_reference$id)
+# make type the following if str_detect finds: rs - target, NT_CONTROL - negative control, otherwise - pos control
+grna_targets_v3$type = ifelse(str_detect(grna_targets_v3$grna_id, "rs"), 
+                                   "target", ifelse(str_detect(grna_targets_v3$grna_id, "NT_CONTROL"), 
+                                                    "negative_control", "positive_control"))
+
+
+
+# match rs+number from the grna_id as grna_target
+grna_targets_v3$grna_target = str_extract(grna_targets_v3$grna_id, "rs[0-9]+")
+grna_targets_v3$chrom = str_extract(grna_targets_v3$grna_id, "chr[0-9]+")
+# match start position from the grna_id by finding the number surrounded by : and .
+grna_targets_v3$start = as.numeric(str_extract(grna_targets_v3$grna_id, "(?<=:)[0-9]+(?=\\.)"))
+grna_targets_v3$end = grna_targets_v3$start+20
+
+grna_targets_v3$grna_target[grna_targets_v3$type == "negative_control"] = "non-targeting"
+
+grna_targets_v3$target_gene[grna_targets_v3$type == "positive_control"] = str_split(grna_targets_v3$grna_id[grna_targets_v3$type == "positive_control"], "_") %>% sapply(`[[`, 1)
+
+grna_targets_v3$grna_target[grna_targets_v3$type == "positive_control"] = grch38$ensgene[match(grna_targets_v3$target_gene[grna_targets_v3$type == "positive_control"], grch38$symbol)]
+
+grna_targets_v3$grna_target[str_detect(grna_targets_v3$grna_id, "CD45")] = "ENSG00000081237"
+
+
+grna_targets_v3$missing = !grna_targets_v3$grna_id %in% feature_reference$id
+sum(grna_targets_v3$missing)
+
+```
+
+```{r prep positive controls for sceptre v3}
+# ------------------------------------------------------------------------------
+# Cleanup controls
+# ------------------------------------------------------------------------------
+positive_controls_v3 = grna_targets_v3 %>%
+  dplyr::filter(type == "positive_control") %>%
+  dplyr::select(grna_target = grna_target, response_id = grna_target) %>%
+  distinct()
+
+positive_controls_v3
+
+
+```
+
+## Setup sceptre object
+```{r setup first sceptre object v3, cache = TRUE}
+
+donorIdsAll = read.csv(file.path(tableDir, "donorIdsAll.csv"), row.names = 1)
+table(donorIdsAll$donorId)
+
+sceptre_object <- import_data_from_cellranger(
+  directories = cellranger_v3,
+  grna_target_data_frame = grna_targets_v3,
+  moi = "low",
+  extra_covariates = donorIdsAll
+)
+
+print(sceptre_object)
+```
+
+```{r construct discovery pairs for sceptre v3, cache = TRUE}
+# ------------------------------------------------------------------------------
+# Construct discovery pairs
+# ------------------------------------------------------------------------------
+discovery_pairs_v3 <- construct_cis_pairs(
+  sceptre_object,
+  positive_control_pairs = positive_controls_v3
+)
+
+```
+
+## custom violin plots
+
+```{r the violin plot function}
+
+# make our own violin plot function based on the sceptre function - alternative would be to use the 
+# sceptre function and then change graphics parameters, but this seemed easier than having to dig through the gg object
+
+plot_response_grna_target_pair_custom <- function(sceptre_object, response_id, grna_target) {
+  # check that grnas have been assigned and qc has been called
+  functs_called <- sceptre_object@functs_called
+  singleton_integration_strategy <- sceptre_object@grna_integration_strategy == "singleton"
+  if (!functs_called[["assign_grnas"]]) {
+    stop("`assign_grnas()` must be called on the `sceptre_object`.")
+  }
+  if (!functs_called[["run_qc"]]) {
+    stop("`run_qc()` must be called on the `sceptre_object`.")
+  }
+  
+  # get grna integration strategy, control group
+  control_group_complement <- sceptre_object@control_group_complement
+  cells_in_use <- sceptre_object@cells_in_use
+  
+  # check that grna_target is present in grna_assignments
+  grna_group_idxs <- sceptre_object@grna_assignments$grna_group_idxs
+  grna_group_names <- names(grna_group_idxs)
+  if (!grna_target %in% grna_group_names) {
+    stop(if (singleton_integration_strategy) "gRNA ID" else "gRNA target `", grna_target, "` is not present within the data.")
+  }
+  
+  # check that the response is present within the data
+  response_matrix <- get_response_matrix(sceptre_object)
+  if (!(response_id %in% rownames(response_matrix))) {
+    stop("Response `", response_id, "` is not present within the data.")
+  }
+  
+  # extract the counts for this pair; filter for cells in use
+  y <- sceptre:::load_row(mat = response_matrix, id = response_id)[cells_in_use]
+  
+  # get the sequencing depths; filter for cells in use
+  response_n_umis <- sceptre_object@covariate_data_frame$response_n_umis[cells_in_use]
+  
+  # compute the normalized counts
+  normalized_counts <- log(10000 * y / response_n_umis + 1)
+  
+  # get the treated cells and control cells
+  trt_cells <- normalized_counts[grna_group_idxs[[grna_target]]]
+  if (control_group_complement) { # complement set
+    cntrl_cells <- normalized_counts[-grna_group_idxs[[grna_target]]]
+  } else { # nt cells
+    nt_idxs <- sceptre_object@grna_assignments$all_nt_idxs
+    cntrl_cells <- normalized_counts[nt_idxs]
+  }
+  
+  # construct the data frame to plot
+  to_plot <- data.frame(
+    normalized_count = c(trt_cells, cntrl_cells),
+    treatment = c(
+      rep("Treatment", length(trt_cells)),
+      rep("Control", length(cntrl_cells))
+    ) |>
+      factor(levels = c("Treatment", "Control"))
+  )
+  
+  # obtain the p-value (if available); deal with the singleton situation
+  p_val <- 1.5
+  df_list <- list(sceptre_object@power_result, sceptre_object@discovery_result)
+  for (curr_df in df_list) {
+    if (singleton_integration_strategy) {
+      subset_result <- curr_df |>
+        dplyr::filter(response_id == !!response_id, grna_id == !!grna_target)
+    } else {
+      subset_result <- curr_df |>
+        dplyr::filter(response_id == !!response_id, grna_target == !!grna_target)
+    }
+    if (nrow(subset_result) >= 1) {
+      p_val <- subset_result$p_value
+      if (is.na(p_val)) p_val <- 1
+    }
+  }
+  
+  # obtain the annotation
+  # annotation <- cut(p_val,
+  #                   breaks = c(2, 1, 10^(-seq(2, 10)), 0),
+  #                   labels = c(paste0("p <= 10^{", seq(-10, -2), "}"), "p > 0.01", "")
+  # ) |> as.character()
+
+  annotation = paste0("p = ", signif(p_val,2))
+  print(annotation)
+  
+  # create the plot
+  set.seed(4)
+  to_plot$treatment = factor(to_plot$treatment, levels = c("Control", "Treatment"))
+  to_plot_downsample <- to_plot |>
+    dplyr::mutate(is_zero = (normalized_count == 0)) |>
+    dplyr::group_by(is_zero, treatment) |>
+    dplyr::sample_n(size = min(dplyr::n(), 1000))
+  p_out <- ggplot2::ggplot(data = to_plot, mapping = ggplot2::aes(x = treatment, y = normalized_count, col = treatment)) +
+    ggplot2::geom_violin(linewidth = 0.6) +
+    ggplot2::geom_jitter(data = to_plot_downsample, alpha = 0.1, size = 0.5) +
+    theme_bw() +
+    ggplot2::theme(legend.position = "none") +
+    ggplot2::scale_color_manual(values = c("dodgerblue4", "firebrick4")) +
+    ggplot2::xlab("Treatment status") +
+    ggplot2::ylab("Normalized expression") +
+    stat_summary(aes(fill = treatment), color = "black", fun = "mean",geom = "point", shape = 21, size = 3) +
+    ggplot2::scale_fill_manual(values = c("dodgerblue4", "firebrick4")) +
+    ggplot2::annotate("text", x = 1.5, y = max(to_plot$normalized_count) + 0.5, label = annotation, parse = FALSE) +
+    ggplot2::scale_y_continuous(expand = c(0.0, 0.1), limits = c(-0.01, max(to_plot$normalized_count) + 0.7)) +
+    ggplot2::ggtitle(paste0("Response: ", response_id, "\ngRNA", if (singleton_integration_strategy) "" else " target", ": ", grna_target)) +
+    ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
+  
+  
+  return(p_out)
+}
+
+
+```
+
+
+## Sceptre analysis run using nt control group
+
+```{r set up empty sceptre runs object}
+# set up empty results objects
+sceptre_runs = list()
+discovery_results = list()
+```
+
+
+```{r run sceptre for cis results nt control v3, cache = TRUE}
+# ------------------------------------------------------------------------------
+# Run sceptre for cis results
+# ------------------------------------------------------------------------------
+run_name = "v3_low_moi_cis_with_donorID"
+
+sceptre_runs[[run_name]] <- sceptre_object |>
+  set_analysis_parameters(discovery_pairs_v3, positive_controls_v3) |>
+  run_calibration_check(parallel = FALSE )|>
+  run_power_check(parallel = FALSE) |>
+  run_discovery_analysis(parallel = FALSE)
+#
+print(sceptre_runs[[run_name]])
+
+
+```
+
+```{r save results nt control v3}
+write_outputs_to_directory(sceptre_runs[[run_name]], paste(sceptreOutputDir, run_name, sep = "/"))
+#
+discovery_results[[run_name]] = get_result(sceptre_runs[[run_name]], analysis = "run_discovery_analysis")
+head(discovery_results[[run_name]])
+
+discovery_results[[run_name]]$repsonse_gene = grch38$symbol[match(discovery_results[[run_name]]$response_id, grch38$ensgene)]
+
+
+write.csv(discovery_results[[run_name]], file.path(sceptreOutputDir, run_name, "discovery_results.csv"))
+
+x = sceptre_runs[[run_name]]
+
+save(x, file = paste0(dataDir, "/sceptre_runs_", run_name, ".Rdata")) 
+
+rm(x)
+
+```
+
+
+```{r make violin plots nt control v3}
+for (i in 1:nrow(dplyr::filter(discovery_results[[run_name]], p_value < 0.05))) {
+  response_id_ens = discovery_results[[run_name]]$response_id[i]
+  response_id_symbol = grch38$symbol[grch38$ensgene == response_id_ens]
+  grna_target = discovery_results[[run_name]]$grna_target[i]
+  logFC = signif(discovery_results[[run_name]]$log_2_fold_change[i],3)
+  
+  violin = plot_response_grna_target_pair_custom(sceptre_object = sceptre_runs[[run_name]],
+                                          response_id = response_id_ens,
+                                          grna_target = grna_target)
+  
+  newTitle = paste("Response:", response_id_symbol, "(", response_id_ens, ")\ngRNA target:", grna_target, "\nlogFC =", logFC)
+  
+  violin = violin + ggtitle(newTitle)
+  
+  fname = paste("discovery_pair", response_id_ens, response_id_symbol, grna_target, sep = "_")
+  
+
+  if (!(response_id_symbol %in% c(NA, "")) ) {
+    fname = paste0(response_id_symbol, "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  } else {
+    fname = paste0(discovery_results[[run_name]]$response_id[i], "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  }
+  
+  ggsave(paste(sceptreOutputDir, run_name, "violin_plots", fname, sep = "/"), violin)
+}
+
+```
+
+```{r save the analysis plot nt control v3}
+# add pdf to results folder
+pdf(file.path(sceptreOutputDir, run_name, "plot_run_discovery_analysis.pdf"), width=5, height=5)
+plot(sceptre_runs[[run_name]])
+dev.off()
+
+```
+
+
+## Sceptre analysis run using complement control group
+
+
+```{r run sceptre for cis results complement control v3, cache = TRUE}
+# ------------------------------------------------------------------------------
+# Run sceptre for cis results
+# ------------------------------------------------------------------------------
+run_name = "v3_low_moi_cis_with_donorID_complement_control_group"
+
+sceptre_runs[[run_name]] <- sceptre_object |>
+  set_analysis_parameters(discovery_pairs_v3, positive_controls_v3, control_group = "complement") |>
+  run_calibration_check(parallel = FALSE )|>
+  run_power_check(parallel = FALSE) |>
+  run_discovery_analysis(parallel = FALSE)
+#
+print(sceptre_runs[[run_name]])
+
+
+```
+
+```{r save results complement control v3}
+write_outputs_to_directory(sceptre_runs[[run_name]], paste(sceptreOutputDir, run_name, sep = "/"))
+#
+discovery_results[[run_name]] = get_result(sceptre_runs[[run_name]], analysis = "run_discovery_analysis")
+head(discovery_results[[run_name]])
+
+discovery_results[[run_name]]$repsonse_gene = grch38$symbol[match(discovery_results[[run_name]]$response_id, grch38$ensgene)]
+
+
+write.csv(discovery_results[[run_name]], file.path(sceptreOutputDir, run_name, "discovery_results.csv"))
+
+x = sceptre_runs[[run_name]]
+
+save(x, file = paste0(dataDir, "/sceptre_runs_", run_name, ".Rdata")) 
+
+rm(x)
+
+```
+
+
+```{r make violin plots complement control v3}
+for (i in 1:nrow(dplyr::filter(discovery_results[[run_name]], p_value < 0.05))) {
+  response_id_ens = discovery_results[[run_name]]$response_id[i]
+  response_id_symbol = grch38$symbol[grch38$ensgene == response_id_ens]
+  grna_target = discovery_results[[run_name]]$grna_target[i]
+  logFC = signif(discovery_results[[run_name]]$log_2_fold_change[i],3)
+  
+  violin = plot_response_grna_target_pair_custom(sceptre_object = sceptre_runs[[run_name]],
+                                          response_id = response_id_ens,
+                                          grna_target = grna_target)
+  
+  newTitle = paste("Response:", response_id_symbol, "(", response_id_ens, ")\ngRNA target:", grna_target, "\nlogFC =", logFC)
+  
+  violin = violin + ggtitle(newTitle)
+  
+  fname = paste("discovery_pair", response_id_ens, response_id_symbol, grna_target, sep = "_")
+  
+
+  if (!(response_id_symbol %in% c(NA, "")) ) {
+    fname = paste0(response_id_symbol, "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  } else {
+    fname = paste0(discovery_results[[run_name]]$response_id[i], "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  }
+  
+  ggsave(paste(sceptreOutputDir, run_name, "violin_plots", fname, sep = "/"), violin)
+}
+
+```
+
+```{r save the analysis plot complement control v3}
+# add pdf to results folder
+pdf(file.path(sceptreOutputDir, run_name, "plot_run_discovery_analysis.pdf"), width=5, height=5)
+plot(sceptre_runs[[run_name]])
+dev.off()
+
+```
+
+# v2 data analysis with sceptre
+
+## Set up gRNA data
+
+```{r set up guide RNA data for sceptre v2} 
+
+feature_reference = read.csv(file.path(cellranger_v2, "./CRISPR_QTL_v2_feature_reference.csv"), header = TRUE)
+feature_reference = dplyr::filter(feature_reference, feature_type == "CRISPR Guide Capture")
+
+negativeControlsDF = data.frame(grna_id = dplyr::filter(feature_reference, grepl("NT_CONTROL", id))$id,
+                                grna_target = "non-targeting", # negative controls must be named "non-targeting" in the grna_target column
+                                chrom = NA,
+                                start = NA,
+                                end = NA,
+                                missing = NA)
+
+
+grna_targets_v2 = data.frame(grna_id = feature_reference$id)
+# make type the following if str_detect finds: rs - target, NT_CONTROL - negative control, otherwise - pos control
+grna_targets_v2$type = ifelse(str_detect(grna_targets_v2$grna_id, "rs"), 
+                                   "target", ifelse(str_detect(grna_targets_v2$grna_id, "NT_CONTROL"), 
+                                                    "negative_control", "positive_control"))
+
+
+
+# match rs+number from the grna_id as grna_target
+grna_targets_v2$grna_target = str_extract(grna_targets_v2$grna_id, "rs[0-9]+")
+grna_targets_v2$chrom = str_extract(grna_targets_v2$grna_id, "chr[0-9]+")
+# match start position from the grna_id by finding the number surrounded by : and .
+grna_targets_v2$start = as.numeric(str_extract(grna_targets_v2$grna_id, "(?<=:)[0-9]+(?=\\.)"))
+grna_targets_v2$end = grna_targets_v2$start+20
+
+grna_targets_v2$grna_target[grna_targets_v2$type == "negative_control"] = "non-targeting"
+
+grna_targets_v2$target_gene[grna_targets_v2$type == "positive_control"] = str_split(grna_targets_v2$grna_id[grna_targets_v2$type == "positive_control"], "_") %>% sapply(`[[`, 1)
+
+grna_targets_v2$grna_target[grna_targets_v2$type == "positive_control"] = grch38$ensgene[match(grna_targets_v2$target_gene[grna_targets_v2$type == "positive_control"], grch38$symbol)]
+
+
+grna_targets_v2$missing = !grna_targets_v2$grna_id %in% feature_reference$id
+sum(grna_targets_v2$missing)
+
+```
+
+```{r prep positive controls for sceptre v2}
+# ------------------------------------------------------------------------------
+# Cleanup controls
+# ------------------------------------------------------------------------------
+positive_controls_v2 = grna_targets_v2 %>%
+  dplyr::filter(type == "positive_control") %>%
+  dplyr::select(grna_target = grna_target, response_id = grna_target) %>%
+  distinct()
+
+positive_controls_v2
+
+
+```
+
+## Setup sceptre object
+```{r setup v2 sceptre object, cache = TRUE}
+
+sceptre_object <- import_data_from_cellranger(
+  directories = cellranger_v2,
+  grna_target_data_frame = grna_targets_v2,
+  moi = "low"
+)
+
+print(sceptre_object)
+```
+
+```{r construct discovery pairs for sceptre v2, cache = TRUE}
+# ------------------------------------------------------------------------------
+# Construct discovery pairs
+# ------------------------------------------------------------------------------
+discovery_pairs_v2 <- construct_cis_pairs(
+  sceptre_object,
+  positive_control_pairs = positive_controls_v2
+)
+
+```
+
+
+## Sceptre analysis run using nt control group
+
+```{r clear sceptre runs object}
+# to save on memory, reset sceptre_runs objects list (we also saved them to files)
+rm(sceptre_runs)
+gc()
+
+sceptre_runs = list()
+
+```
+
+
+```{r run sceptre for cis results nt control v2, cache = TRUE}
+# ------------------------------------------------------------------------------
+# Run sceptre for cis results
+# ------------------------------------------------------------------------------
+run_name = "v2_low_moi_cis"
+
+sceptre_runs[[run_name]] <- sceptre_object |>
+  set_analysis_parameters(discovery_pairs_v2, positive_controls_v2) |>
+  run_calibration_check(parallel = FALSE )|>
+  run_power_check(parallel = FALSE) |>
+  run_discovery_analysis(parallel = FALSE)
+#
+print(sceptre_runs[[run_name]])
+
+
+```
+
+```{r save results nt control v2}
+write_outputs_to_directory(sceptre_runs[[run_name]], paste(sceptreOutputDir, run_name, sep = "/"))
+#
+discovery_results[[run_name]] = get_result(sceptre_runs[[run_name]], analysis = "run_discovery_analysis")
+head(discovery_results[[run_name]])
+
+discovery_results[[run_name]]$repsonse_gene = grch38$symbol[match(discovery_results[[run_name]]$response_id, grch38$ensgene)]
+
+
+write.csv(discovery_results[[run_name]], file.path(sceptreOutputDir, run_name, "discovery_results.csv"))
+
+x = sceptre_runs[[run_name]]
+
+save(x, file = paste0(dataDir, "/sceptre_runs_", run_name, ".Rdata")) 
+
+rm(x)
+
+```
+
+
+```{r make violin plots nt control v2}
+for (i in 1:nrow(dplyr::filter(discovery_results[[run_name]], p_value < 0.05))) {
+  response_id_ens = discovery_results[[run_name]]$response_id[i]
+  response_id_symbol = grch38$symbol[grch38$ensgene == response_id_ens]
+  grna_target = discovery_results[[run_name]]$grna_target[i]
+  logFC = signif(discovery_results[[run_name]]$log_2_fold_change[i],3)
+  
+  violin = plot_response_grna_target_pair_custom(sceptre_object = sceptre_runs[[run_name]],
+                                          response_id = response_id_ens,
+                                          grna_target = grna_target)
+  
+  newTitle = paste("Response:", response_id_symbol, "(", response_id_ens, ")\ngRNA target:", grna_target, "\nlogFC =", logFC)
+  
+  violin = violin + ggtitle(newTitle)
+  
+  fname = paste("discovery_pair", response_id_ens, response_id_symbol, grna_target, sep = "_")
+  
+
+  if (!(response_id_symbol %in% c(NA, "")) ) {
+    fname = paste0(response_id_symbol, "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  } else {
+    fname = paste0(discovery_results[[run_name]]$response_id[i], "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  }
+  
+  ggsave(paste(sceptreOutputDir, run_name, "violin_plots", fname, sep = "/"), violin)
+}
+
+```
+
+```{r save the analysis plot nt control v2}
+# add pdf to results folder
+pdf(file.path(sceptreOutputDir, run_name, "plot_run_discovery_analysis.pdf"), width=5, height=5)
+plot(sceptre_runs[[run_name]])
+dev.off()
+
+```
+
+
+## Sceptre analysis run using complement control group
+
+
+```{r run sceptre for cis results complement v2 , cache = TRUE}
+# ------------------------------------------------------------------------------
+# Run sceptre for cis results
+# ------------------------------------------------------------------------------
+run_name = "v2_low_moi_cis_complement_control_group"
+
+sceptre_runs[[run_name]] <- sceptre_object |>
+  set_analysis_parameters(discovery_pairs_v2, positive_controls_v2, control_group = "complement") |>
+  run_calibration_check(parallel = FALSE )|>
+  run_power_check(parallel = FALSE) |>
+  run_discovery_analysis(parallel = FALSE)
+#
+print(sceptre_runs[[run_name]])
+
+
+```
+
+```{r save results  complement v2}
+write_outputs_to_directory(sceptre_runs[[run_name]], paste(sceptreOutputDir, run_name, sep = "/"))
+#
+discovery_results[[run_name]] = get_result(sceptre_runs[[run_name]], analysis = "run_discovery_analysis")
+head(discovery_results[[run_name]])
+
+discovery_results[[run_name]]$repsonse_gene = grch38$symbol[match(discovery_results[[run_name]]$response_id, grch38$ensgene)]
+
+
+write.csv(discovery_results[[run_name]], file.path(sceptreOutputDir, run_name, "discovery_results.csv"))
+
+x = sceptre_runs[[run_name]]
+
+save(x, file = paste0(dataDir, "/sceptre_runs_", run_name, ".Rdata")) 
+
+rm(x)
+
+```
+
+
+```{r make violin plots  complement v2}
+for (i in 1:nrow(dplyr::filter(discovery_results[[run_name]], p_value < 0.05))) {
+  response_id_ens = discovery_results[[run_name]]$response_id[i]
+  response_id_symbol = grch38$symbol[grch38$ensgene == response_id_ens]
+  grna_target = discovery_results[[run_name]]$grna_target[i]
+  logFC = signif(discovery_results[[run_name]]$log_2_fold_change[i],3)
+  
+  violin = plot_response_grna_target_pair_custom(sceptre_object = sceptre_runs[[run_name]],
+                                          response_id = response_id_ens,
+                                          grna_target = grna_target)
+  
+  newTitle = paste("Response:", response_id_symbol, "(", response_id_ens, ")\ngRNA target:", grna_target, "\nlogFC =", logFC)
+  
+  violin = violin + ggtitle(newTitle)
+  
+  fname = paste("discovery_pair", response_id_ens, response_id_symbol, grna_target, sep = "_")
+  
+
+  if (!(response_id_symbol %in% c(NA, "")) ) {
+    fname = paste0(response_id_symbol, "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  } else {
+    fname = paste0(discovery_results[[run_name]]$response_id[i], "_", discovery_results[[run_name]]$grna_target[i], ".pdf")
+  }
+  
+  ggsave(paste(sceptreOutputDir, run_name, "violin_plots", fname, sep = "/"), violin)
+}
+
+```
+
+```{r save the analysis plot  complement v2}
+# add pdf to results folder
+pdf(file.path(sceptreOutputDir, run_name, "plot_run_discovery_analysis.pdf"), width=5, height=5)
+plot(sceptre_runs[[run_name]])
+dev.off()
+
+```
+
