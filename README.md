@@ -4,7 +4,7 @@ In this README, there will be information on each analysis code file which is us
 
 ### 20240913_eliminate_SNP.Rmd
 
-This Rmd eliminates a SNP which appeared in the results which should not have been there.
+This .Rmd eliminates a SNP which appeared in the results which should not have been there because it was not even in the sequencing library. 
 
 ### 20240913_mpra_merge_creation_FINAL.Rmd
 
@@ -53,11 +53,17 @@ This Rmd contains the transcription factor binding analysis of the MPRA data. Th
 
  ### 20240914_tf_columns_mpra_merge.Rmd
   
-After creating TF data, create the columns which are used in MPRA merge.
+After creating the TF data in the previous .Rmd, this .Rmd created the columns which are used in MPRA merge. This .Rmd incorporates data two TF binding site programs, motifbreakR and Ananastra.  
    
 ### 20240914_UK_biobank_finemapping_enrichment.Rmd
   
-This Rmd contains the enrichments for emVars in UKBB fine-mapping data. 
+This Rmd contains the enrichments for MPRA emVars for variants fine-mapped in UK BioBank (UKBB) fine-mapping data. The steps to this analysis include:
+
+Import the UKBB data and merge with MPRA data. 
+
+Create a table with MPRA variants and the UKBB data for the paper.
+
+Create the enrichment plots for MPRA emVars in UKBB data. 
     
 ### 20240913_mpra_supplementary_tables.Rmd
 
@@ -98,6 +104,7 @@ Finally using all the tables which are relevant to the MPRA data created so far,
 15. Jurkat MPRA functional annotations
 
 ### Raylab Analysis V2G Jupyter Notebook
+
 This Jupyter notebook generates variant-to-gene (V2G) mapping for rsIDs of interest. Key steps include:
 
 Converting rsIDs to variant IDs using genopyc
