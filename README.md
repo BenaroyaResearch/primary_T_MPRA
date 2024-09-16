@@ -114,3 +114,7 @@ Filtering V2G output based on cell-specific expression
 Creating background and foreground datasets for network analysis
 
 Requires Python (pandas, genopyc, polars) and R (otargen, purrr, dplyr, readr) libraries. Outputs include filtered V2G data and gene sets for further analysis.
+
+### CRISPR_screen_analysis.Rmd
+
+This markdown file uses Seurat and SCEPTRE to analyze single-cell CRISPR screen data.
