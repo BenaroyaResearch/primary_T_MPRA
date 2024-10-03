@@ -71,37 +71,45 @@ Finally using all the tables which are relevant to the MPRA data created so far,
 
 **NOT THE ORDER IN THE ACTUAL SUPPLEMENTARY TABLES**
 
-1. Tcell MPRA results
+Tcell MPRA results
  
-2. Jurkat MPRA results 
+Jurkat MPRA results 
  
-3. PICS enrichment all loci
+PICS enrichment all loci
  
-4. PICS enrichment emvars loci
+PICS enrichment emvars loci
  
-5. UK biobank enrichment all loci
+UK biobank enrichment all loci
 
-6. UK biobank enrichment emvars loci
+UK biobank enrichment emvars loci
 
-7. tcell motifbreakr mpra combined
+tcell motifbreakr mpra combined
  
-8. tcell motifbreakr logskew ttest
+tcell motifbreakr logskew ttest
  
-9. jurkat motifbreakr mpra combined
+jurkat motifbreakr mpra combined
 
-10. jurkat motifbreakr logskew ttest
+jurkat motifbreakr logskew ttest
 
-11. ChromHMM enrich
+ChromHMM enrich
 
-12. Histone CAGE DHS enr
+Histone CAGE DHS enr
 
-13. T cell MPRA functional annotations
+T cell MPRA functional annotations
 
-14. PICS by MPRA
+PICS by MPRA
 
-14. UKBB by MPRA
+UKBB by MPRA
 
-15. Jurkat MPRA functional annotations
+Jurkat MPRA functional annotations
+
+Encode DHS Enrichment
+
+T-cell DHS Grid Search
+
+Jurkat DHS Grid Search
+
+Tcell TF ttest by disease
 
 ### Raylab Analysis V2G Jupyter Notebook
 
