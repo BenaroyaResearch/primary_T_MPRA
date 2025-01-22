@@ -1,0 +1,1281 @@
+---
+title: "Final motifbreakr enrichment analysis"
+author: Max Dippel
+date: "2024-04-29"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+This is the motifbreakr analysis for "Genetic and epigenetic screens in human primary T cells link candidate causal autoimmune variants to T cell proliferation" (Ho et al. *in review*). 
+
+Steps to motifbreakr analysis:
+
+1. Create a Granges bed file of the variants mpra tested in the MPRA
+
+2. Run motifbreakR function to generate TF binding data on the MPRA variants
+
+3. Merge motifbreakr and MPRA data
+
+4. Run t-test of primary T cell MPRA expression of variants which do and do not bind to each tf 
+
+5. Repeat step 4 with jurkat mpra expression data
+
+6. Run t-test analysis for variants fine mapped to each disease
+
+7. Merge the primary tcell and unstimulated jurkat data
+
+8. Compare the results of jurkat and primary T cells
+
+Loading packages
+```{r packages,message=FALSE,warning=FALSE}
+library(stringr)
+library(data.table)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(SNPlocs.Hsapiens.dbSNP155.GRCh38)
+library(tidyverse) 
+library(readxl)
+library(rsample) 
+# library(ggpubr) 
+library(cluster)    
+#library(factoextra) 
+library(dendextend)
+library(rjson)
+#library(MotifDb)
+library(motifbreakR)
+#library(BSgenome)
+library(BSgenome.Hsapiens.UCSC.hg38)
+#library(BSgenome.Hsapiens.UCSC.hg19)
+# library(GenomicRanges)
+library(ggdendro)
+library(gridExtra)
+#library(GenomicFeatures)
+```
+
+List directories
+```{r}
+data.dir <- "~/Desktop/Ho et al. writings/Code_from_scratch2/data/"
+plots.dir <- "/Users/mdippel/Desktop/Ho\ et\ al.\ writings/Code_from_scratch2/plots/"
+mpra.name1 <- "20241111_tcell"
+mpra.name2 <- "20241111_jurkat"
+motifbreakr.name <- "2023.11.15.hg38.tcells.glm.all.snps.hocomoco.bed"
+```
+
+
+## Motifbreakr bed file
+
+Create bed file from the MPRA data and create a SNP granges object from them
+```{r , eval=FALSE}
+# Load MPRA data
+tcell_mpra <- read.table(paste0(data.dir,mpra.name1,"_mpra_merge_hg38_all.txt"), sep="\t", header=T)
+
+# subset the mpra to only the columns you seed
+mpra.bed<-subset(tcell_mpra, select=c(chr, snp_start, snp_end, SNP))
+# Create a name column in the mpra which uses the chromosome, end snp, and SNP to create a name
+mpra.bed$name<-paste(mpra.bed$chr, mpra.bed$snp_end, str_split_fixed(mpra.bed$SNP, "\\:", 4)[,3], str_split_fixed(mpra.bed$SNP, "\\:", 4)[,4],sep=":")
+# create a blank mpra.bed score column
+mpra.bed$score<-0
+# Create a strand column with just +
+mpra.bed$strand<-"+"
+# Now subset even further to only the colums you need
+mpra.bed<-subset(mpra.bed, select=c(chr, snp_start, snp_end, name,score, strand))
+# create the mpra bed file
+write.table(mpra.bed, paste0(data.dir,"motifbreakr/tcell_mpra_snps.bed"), row.names = F, col.names = F, sep="\t", quote=F)
+# Create SNPs GRanges object
+tcell.snps.hg38.frombed <- snps.from.file(file = paste0(data.dir,"motifbreakr/tcell_mpra_snps.bed"),
+                                  dbSNP = SNPlocs.Hsapiens.dbSNP155.GRCh38,
+                                  search.genome = BSgenome.Hsapiens.UCSC.hg38,
+                                  format = "bed")
+```
+
+
+## Motifbreakr function
+
+Run motifbreakr with Hocomoco v.11 and the bed file
+```{r motifbreakr function, eval=FALSE}
+tcells.hocomoco.bed.results <- motifbreakR(snpList = tcell.snps.hg38.frombed, filterp = TRUE,
+                       pwmList = subset(MotifDb, 
+                                        dataSource %in% c("HOCOMOCOv11-core-A", "HOCOMOCOv11-core-B", "HOCOMOCOv11-core-C")),
+                       threshold = 1e-4,
+                       method = "log",
+                       bkg = c(A=0.25, C=0.25, G=0.25, T=0.25),
+                       BPPARAM = BiocParallel::SerialParam())
+
+results <- data.frame(tcells.hocomoco.bed.results, stringsAsFactors = F)
+results$seqnames <- as.character(results$seqnames)
+results$motifPos <- as.character(results$motifPos)
+write.table(results,paste0(data.dir,"motifbreakr/",motifbreakr.name,".motifbreakr.results.txt"), row.names=FALSE,col.names=TRUE,sep="\t")
+```
+
+## Primary tcell analysis
+
+### Set up 
+
+Set up Primary t cell  MPRA and the motifbreakr results 
+```{r primary tcell set up}
+# Set up cell type
+celltype <- "Primary Tcell"
+celltype_dir <- "tcell"
+rna_cell.type <- "tcell"
+# Set up motif db option
+motif_db <- "hocomoco"
+# Set up directories for tables
+mpra.dir.1 <- paste0(data.dir, mpra.name1,"_mpra_merge_hg38_filtered.txt")
+motifbreakr_dir <- paste0(data.dir,"motifbreakr/",motifbreakr.name,".motifbreakr.results.txt")
+# Give the cell type a distinct color
+celltype_color <- "#E14A4A"
+```
+
+# import RNA-seq data
+```{r}
+################
+# Import RNA-seq data
+################
+rna_cell.type 
+# Importing dice gene expression data for primary CD4 tcells
+# https://dice-database.org/downloads
+tcell_TPM <- read.csv(paste0(data.dir,"motifbreakr/","CD4_NAIVE_TPM.csv"), header=T)
+# Only the max TPM values
+tcell_TPM <- subset(tcell_TPM, select=c("Additional_annotations", "X0"))
+# Write the correct gene name
+tcell_TPM$Additional_annotations <- gsub(";protein_coding","",tcell_TPM$Additional_annotations)
+# Filter for over 1 TPM
+tcell_TPM <- subset(tcell_TPM, X0 >= 1)
+# Rename the columns to merge with the motif data
+names(tcell_TPM) <- c("tf","TPM")
+
+jurkatTPM <- read.table(paste0(data.dir,"motifbreakr/","GSE145453_norm_counts_TPM_GRCh38.p13_NCBI.tsv"), sep = '\t', header=T)
+#https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE145453
+# Resting Jurkat GSM4318505, GSM4318506
+# Stimulated Jurkat GSM4318507, GSM4318508
+# Stimulated + chemokine Jurkat GSM4318509, GSM4318510
+# The annotate file in the GEO data set Human.GRCh38.p13.annot.tsv did not have that many genes (39000 our of 20000) so I am going to use an online tool to convert the gene IDs to 
+# https://www.syngoportal.org/convert
+# This takes a long time but the results will be worth it. Use NCBI entrez Gene (need to confirm)
+annotateTPM <- read_excel(paste0(data.dir,"motifbreakr/","idmap.xlsx"))
+annotateTPM <- subset(annotateTPM, select=c(query,symbol))
+names(annotateTPM) <- c("GeneID","tf")
+jurkatTPM <- merge(jurkatTPM,annotateTPM, by="GeneID")
+jurkatTPM$unstim_jurkat_TPM <- pmax(jurkatTPM$GSM4318505,jurkatTPM$GSM4318506)
+jurkatTPM$stim_jurkat_TPM <- pmax(jurkatTPM$GSM4318507,jurkatTPM$GSM4318508)
+unstim_jurkat_TPM<- subset(jurkatTPM, select=c(tf,unstim_jurkat_TPM))
+unstim_jurkat_TPM <- subset(unstim_jurkat_TPM, unstim_jurkat_TPM >= 1)
+stim_jurkat_TPM<- subset(jurkatTPM, select=c(tf,stim_jurkat_TPM))
+stim_jurkat_TPM <- subset(stim_jurkat_TPM, stim_jurkat_TPM >= 1)
+```
+
+### import and reformat data
+Import motifbreakr and mpra tables and modify them to be used in this analysis
+```{r primary t cell import data}
+#########################
+# Creating a data set with motif data and MPRA data
+#########################
+
+# Import motif data
+motif.dat <- read.table(motifbreakr_dir, sep="\t", header=T)
+
+# Import  MPRA
+mpra <- read.table(mpra.dir.1, sep="\t", header=T)
+
+# Makes geneSymbol (TF name) all uppercase
+motif.dat$geneSymbol <- toupper(motif.dat$geneSymbol)
+# make geneSymbol (TF Name) change from slash / to underscore so that the plots can save
+motif.dat$geneSymbol <- gsub("/","_",motif.dat$geneSymbol)
+
+# Filter by genes seen in RNAseq data (hash out the line below to eliminate the RNAseq filter). This is now going to be applied downstream after the t-test data
+# motif.dat <- merge(motif.dat,get(paste0(rna_cell.type,"_TPM")),by="geneSymbol")
+
+# Subset the motif data
+motif.dat<-subset(motif.dat,  select=c(seqnames, end, REF, ALT,SNP_id, geneSymbol,scoreRef ,scoreAlt, alleleDiff))
+# Subset MPRA
+mpra <- subset(mpra, select=c(SNP,A.log2FC,B.log2FC,LogSkew,mpra_sig,rsid,ref_allele,alt_allele))
+
+######## code for merging mpra and motifbreakr by chromosome and position ########
+# Get rid of the chr in motifbreakr SNP_id column to conform with mpra SNP column
+motif.dat$SNP <- gsub("chr","",motif.dat$SNP_id)
+# Merge Motifbreakr and MPRA ( we expect a similar number to the 61570 that are in the motif.dat right now (example run not represenative of all runs))
+motif.mpra.dat<-merge(motif.dat, mpra, by="SNP", all.x=T, all.y=T)
+# 61579. Probably due to mpra duplicates. 
+# An issue here is that there are variants in MPRA with SNP names with multiple alternate alleles, but that doesn't seem to be a huge issue. 
+
+####### code for merging by rsid which is not used anymore #########
+# Create a SNP column for the motifbreakr data (used to merge with MPRA)
+# motif.dat$rsid<- motif.dat$SNP_id
+# Merge Motifbreakr and MPRA
+# motif.mpra.dat<-merge(motif.dat, mpra, by="rsid", all.x=T, all.y=F)
+
+# Make sure mpra data is only the mpra_sig categories that we want
+motif.mpra.dat <- subset(motif.mpra.dat, mpra_sig %in% c("Enhancer_Skew","Enhancer_nSkew","nEnhancer_nSkew"))
+# Create emVar not emVar column
+motif.mpra.dat$variant_skew <- ifelse(motif.mpra.dat$mpra_sig == "Enhancer_Skew", "emVar", "non_emVar")
+
+# Make sure alleles for Motifbreakr and MPRA are the same 
+# Rename the columns 
+motif.mpra.dat$motifbreakr_ref <- motif.mpra.dat$REF
+motif.mpra.dat$mpra_ref <- motif.mpra.dat$ref_allele
+# Create a column with a 1 when the motifbreakr and mpra alleles match (Improve this loop)
+motif.mpra.dat$ref_agree <- NA
+motif.mpra.dat$ref_agree <- as.integer(motif.mpra.dat$motifbreakr_ref == motif.mpra.dat$mpra_ref)
+# Subset to only variants in which the reference allele in the MPRA and motifbreakr match
+motif.mpra.dat <- subset(motif.mpra.dat, ref_agree==1)
+
+# Make sure alleles for Motifbreakr and MPRA are the same 
+# Rename the columns 
+motif.mpra.dat$motifbreakr_alt <- motif.mpra.dat$ALT
+motif.mpra.dat$mpra_alt <- motif.mpra.dat$alt_allele
+# Create a column with a 1 when the motifbreakr and mpra alleles match (Improve this loop)
+motif.mpra.dat$alt_agree <- NA
+motif.mpra.dat$alt_agree <- as.integer(motif.mpra.dat$motifbreakr_alt == motif.mpra.dat$mpra_alt)
+# Subset to only variants in which the alternate allele in the MPRA and motifbreakr match
+motif.mpra.dat <- subset(motif.mpra.dat, alt_agree==1)
+
+# Add back in the variants without motifbreakr alleles
+motif.mpra.dat<-merge(motif.mpra.dat, mpra, by=names(mpra), all.x=T, all.y=T)
+
+# Generate unique MPRA sites 
+motif.mpra.dat$unique_snp_tf <- paste0(motif.mpra.dat$seqnames,":",motif.mpra.dat$end,":",
+                                    motif.mpra.dat$REF,":",motif.mpra.dat$ALT,"_",motif.mpra.dat$geneSymbol)
+motif.mpra.dat<-motif.mpra.dat[order(-abs(motif.mpra.dat$alleleDiff)),]
+motif.mpra.dat<-motif.mpra.dat[!duplicated(motif.mpra.dat$unique_snp_tf),]
+
+write.table(motif.mpra.dat, paste0(data.dir,"motifbreakr/tcell/", "motif.mpra.dat_",celltype_dir,"_",motif_db,".txt"), row.names=FALSE,col.names=TRUE,sep="\t", quote=F)
+
+
+TF_list <-  unique(motif.mpra.dat$geneSymbol)
+
+##################
+
+# Plots which flip the sign of logskew for negative binders and using a binary readout for all differential TF binding
+
+##################
+
+# Create the TF bind or not bind data with a column for LogSkew, SNP and a column for each TF with the value of alleleDiff inside it if the TF binds to that particular row's SNP
+
+TF_all_bind_data <- subset(motif.mpra.dat, select=c(geneSymbol,LogSkew,SNP,alleleDiff))
+# Pivot the data to wide format using tidyr::pivot_wider
+TF_all_bind_data <- TF_all_bind_data %>%
+  pivot_wider(names_from = geneSymbol, values_from = alleleDiff)
+
+TF_all_bind_data <- unique(TF_all_bind_data)
+
+# The filter for the number of observations needed to have sufficient sample size for each TF
+TF_all_bind_data <- TF_all_bind_data[, (colSums(!is.na(TF_all_bind_data)) >= 5)==TRUE]
+# If you combine this with the activity filter the results really change a lot
+
+# For each MPRA variant, find the fold change of the allele with the largest absolute fold change
+# This creates a column full of NAs for the loop to fill
+mpra$max_abs_fc <- NA
+# This loop calculates the column of max_abs_fc. It takes the two alleles A and B and calculates which one's absolute value is larger. That larger value is the value of the new column (can be positive or negative). 
+for(i in 1:nrow(mpra)){
+  if(abs(mpra[i,]$A.log2FC)>abs(mpra[i,]$B.log2FC)){
+    mpra[i,]$max_abs_fc<-mpra[i,]$A.log2FC
+  }else{
+    mpra[i,]$max_abs_fc<-mpra[i,]$B.log2FC
+  }
+}
+
+# Add back in the varaints which bind to no TFs
+logskew_fc_all_vars <- subset(mpra, select=c(SNP,LogSkew,max_abs_fc))
+
+TF_all_bind_data <- merge(logskew_fc_all_vars,TF_all_bind_data, by=c("SNP","LogSkew"), all.x=T)
+
+write.table(TF_all_bind_data, paste0(data.dir, "motifbreakr/tcell/", "TF_all_bind_data_",celltype_dir,"_",motif_db,".txt"), row.names=FALSE,col.names=TRUE,sep="\t", quote=F)
+```
+
+### analysis loop
+Motifbreakr analysis loop for primary t cells
+```{r primary t cell analysis loop}
+# TF list 
+TF_list <- names(TF_all_bind_data)
+TF_list <- TF_list[4:length(TF_list)] 
+
+# Create test with different samples of flipping the same amount of variants in the no bind as you do in the yes bind.
+# Now create a data frame with p value and effect size for all the TFs. 
+t.test.all.bind.motif.dat <- NULL
+hundred.p.values.per.tf <- data.frame(p.val=1:100)
+# T-test to test whether the distribution of LogSkew differs between variants that bind to a TF and those that don't bind 
+for(tf in TF_list){
+
+temp_data<-TF_all_bind_data
+# How many variants which bind to this particular tf are being flipped?
+# Bind to TF 
+specific_tf_data <- subset(temp_data,  select=c("SNP","LogSkew","max_abs_fc",tf))
+# This is the sample size of the allele which are flipped for the tfs which bind to a particular TF. Change this sign as well as the one below to flip the plot
+size_flipped_allelediff <- nrow(subset(specific_tf_data,  is.na(specific_tf_data[[tf]])==FALSE & specific_tf_data[[tf]]>=0))
+
+# Find the variants which bind to a particular tf
+yes_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])!=TRUE)
+# flip the signs of logskew for tfs that bind and tfs that don't no bind (which we don't even normally flip) separately. Change the sign with the one above in order to flip the plot
+yes_tf_bind$LogSkew <- ifelse(!is.na(yes_tf_bind[[tf]]) & yes_tf_bind[[tf]] >= 0, -yes_tf_bind$LogSkew, yes_tf_bind$LogSkew)
+# Find the tfs that do not bind to a particular tf
+no_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])==TRUE)
+# Find the size of rows that must be flipped by calculating the percent of rows that were flipped from the variants which do bind to a particular tf and multiplying it by the rows of the variants that do not bind 
+size_flip_no_bind <- nrow(no_tf_bind)* (size_flipped_allelediff/nrow(yes_tf_bind))
+# Pick a certain amount of rows to flip from those TFs which do not bind. 
+rows_to_flip <- sample(1:nrow(no_tf_bind), size=size_flip_no_bind, replace=FALSE)
+# Now flip the LogSkew of the rows which I picked for the variants which do not bind to that TF
+no_tf_bind$LogSkew[rows_to_flip] <- -no_tf_bind$LogSkew[rows_to_flip]
+
+# Number of variants which bind to this particular tf
+n <- length(yes_tf_bind$LogSkew)
+# Calculating effect size (Cohen's D)
+d <- (mean(yes_tf_bind$LogSkew, na.rm = TRUE) - mean(no_tf_bind$LogSkew, na.rm = TRUE)) / (sqrt(((sd(yes_tf_bind$LogSkew, na.rm = TRUE)^2)+(sd(no_tf_bind$LogSkew, na.rm = TRUE)^2)/2)))
+mu1 <- mean(yes_tf_bind$LogSkew, na.rm = TRUE)
+sd1 <- sd(yes_tf_bind$LogSkew, na.rm = TRUE)
+mu0 <- mean(no_tf_bind$LogSkew, na.rm = TRUE)
+sd0 <- sd(no_tf_bind$LogSkew, na.rm = TRUE)
+
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+skew.bind.t.test <- t.test(x=yes_tf_bind$LogSkew, y= no_tf_bind$LogSkew,alternative = c("two.sided"))
+t <- skew.bind.t.test$statistic
+df <- skew.bind.t.test$parameter
+p <- skew.bind.t.test$p.value
+
+t.test.all.bind.motif.dat <- rbind(t.test.all.bind.motif.dat, data.frame(tf,p,d,n,t,df,mu1,sd1,mu0,sd0))
+t.test.all.bind.motif.dat
+
+# Repeat t-test 100 times
+#################################
+for(i in 1:100){
+
+# How many variants which bind to this particular tf are being flipped?
+# Bind to TF 
+specific_tf_data <- subset(temp_data,  select=c("SNP","LogSkew","max_abs_fc",tf))
+# This is the sample size of the allele which are flipped for the tfs which bind to a particular TF. Change this sign as well as the one below to flip the plot
+size_flipped_allelediff <- nrow(subset(specific_tf_data,  is.na(specific_tf_data[[tf]])==FALSE & specific_tf_data[[tf]]>=0))
+
+# Find the variants which bind to a particular tf
+yes_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])!=TRUE)
+# flip the signs of logskew for tfs that bind and tfs that don't no bind (which we don't even nromally flip) separately. Change the sign with the one above in order to flip the plot
+yes_tf_bind$LogSkew <- ifelse(!is.na(yes_tf_bind[[tf]]) & yes_tf_bind[[tf]] >= 0, -yes_tf_bind$LogSkew, yes_tf_bind$LogSkew)
+# Find the tfs that do not bind to a particular tf
+no_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])==TRUE)
+# Find the size of rows that must be flipped by calculating the percent of rows that were flipped from the variants which do bind to a particular tf and multiplying it by the rows of the variants that do not bind 
+size_flip_no_bind <- nrow(no_tf_bind)* (size_flipped_allelediff/nrow(yes_tf_bind))
+# Pick a certain amount of rows to flip from those TFs which do not bind. 
+rows_to_flip <- sample(1:nrow(no_tf_bind), size=size_flip_no_bind, replace=FALSE)
+# Now flip the LogSkew of the rows which I picked for the variants which do not bind to that TF
+no_tf_bind$LogSkew[rows_to_flip] <- -no_tf_bind$LogSkew[rows_to_flip]
+
+# Calculating effect size (Cohen's D)
+d <- (mean(yes_tf_bind$LogSkew, na.rm = TRUE) - mean(no_tf_bind$LogSkew, na.rm = TRUE)) / (sqrt(((sd(yes_tf_bind$LogSkew, na.rm = TRUE)^2)+(sd(no_tf_bind$LogSkew, na.rm = TRUE)^2)/2)))
+
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+skew.bind.t.test <- t.test(x=yes_tf_bind$LogSkew, y= no_tf_bind$LogSkew,alternative = c("two.sided"))
+p <- skew.bind.t.test$p.value
+hundred.p.values.per.tf[[tf]][i] <- p
+}
+#################################
+
+ }
+
+# Get a subsetted list of tfs which only have significant p-values
+sig_tfs <- data.frame(names(hundred.p.values.per.tf)[2:ncol(hundred.p.values.per.tf)])
+names(sig_tfs) <- "tf"
+for (i in 1:length(TF_list)) {
+sig_tfs$max.p[i] <- max(hundred.p.values.per.tf[[TF_list[[i]]]])
+}
+
+
+t.test.all.bind.motif.dat <- merge(t.test.all.bind.motif.dat,sig_tfs,by="tf")
+
+write.table(t.test.all.bind.motif.dat, paste0(data.dir,"motifbreakr/tcell/", "t.test.all.bind.motif.dat_",celltype_dir,"_",motif_db,".txt"), row.names=FALSE,col.names=TRUE,sep="\t")
+
+t.test.all.bind.motif.dat <- read.table(paste0(data.dir,"motifbreakr/tcell/", "t.test.all.bind.motif.dat_",celltype_dir,"_",motif_db,".txt"),header=TRUE,sep="\t")
+
+# Filter by genes seen in RNAseq data (hash out the line below to eliminate the RNAseq filter)
+t.test.all.bind.motif.dat <- merge(t.test.all.bind.motif.dat,get(paste0(rna_cell.type,"_TPM")),by="tf")
+
+top_sample_size <- t.test.all.bind.motif.dat[order(-t.test.all.bind.motif.dat$n),]
+
+GFI1B_sample_size <- subset(t.test.all.bind.motif.dat, tf=="NFKB1")$n
+
+yes_bind_sample_size_hist <- ggplot(data=t.test.all.bind.motif.dat, aes(n)) + 
+  geom_histogram(binwidth = 10, fill="#5D93CD") + theme_bw() +labs(title="Sample size of variants which bind to each tf",caption= paste0("top tfs: ", top_sample_size$tf[1], ", ",top_sample_size$tf[2],", ", top_sample_size$tf[3],", ", top_sample_size$tf[4],", ",top_sample_size$tf[5])) + geom_vline(xintercept = GFI1B_sample_size, color="#E14A4A") +annotate("text", x=(GFI1B_sample_size-7), y=16, label="NFKB1", angle=90) + annotate("text", x=(GFI1B_sample_size + 7), y=16, label=GFI1B_sample_size, angle=90)
+yes_bind_sample_size_hist
+
+# Lowest number of variants which bind to a particular TF
+min(t.test.all.bind.motif.dat$n)
+```
+
+### plots 
+Motifbreakr analysis plots for primary t cells
+```{r primary t cell plots}
+# Creating labels for the plot below
+t.test.all.bind.motif.dat_ranked <- t.test.all.bind.motif.dat[order(t.test.all.bind.motif.dat$p),]
+t.test.all.bind.motif.dat_ranked$rank <- c(1:nrow(t.test.all.bind.motif.dat_ranked))
+rows <- 0.15*nrow(t.test.all.bind.motif.dat_ranked)
+labels <- t.test.all.bind.motif.dat_ranked$tf[1:rows]
+
+# Plot of t-test p-values and effect size of LogSkew comparing SNPs which bind and do not bind to TF
+plot1 <- ggplot(data=t.test.all.bind.motif.dat_ranked , aes(x = d, y=(-log10(p)))) + geom_point(colour = celltype_color) + geom_text_repel(data=subset(t.test.all.bind.motif.dat_ranked , tf==labels), aes(label=tf), max.overlaps = 50) + theme_bw() + xlab("Cohen's D (effect size)") + ylab("T-test log10 p-value") + 
+  labs(title="", subtitle = "LogSkew comparing SNPs which bind and do not bind to TF", caption = paste0("Cell type: ", celltype, " ; motif db: ", motif_db)) + 
+  theme(panel.grid.minor = element_blank()) + geom_point(data=subset(t.test.all.bind.motif.dat_ranked, max.p>=0.05), colour = "gray50")
+print(plot1)
+
+plot.name <- paste0("Volcano_plot_", celltype,"_", motif_db, "_all_flipped_binding", "", ".pdf")
+plot.loc <- paste0(plots.dir,"motifbreakr/tcell")
+ggsave(plot.name,plot = plot1, path = plot.loc,height=4.5,width=7)
+
+
+t.test.all.bind.motif.dat_ranked <- t.test.all.bind.motif.dat[order(t.test.all.bind.motif.dat$p),]
+top_tf <- t.test.all.bind.motif.dat_ranked$tf[1]
+top_ten_tfs <- t.test.all.bind.motif.dat_ranked$tf[1:10]
+
+all.top.tf.dat <- data.frame(SNP=NULL, rsid=NULL,geneSymbol=NULL, alleleDiff=NULL, LogSkew=NULL, mpra_sig=NULL, top_pics=NULL, top_disease=NULL, dhs_Tcell_merged=NULL)
+
+for (tf in top_ten_tfs){
+  top.tf.dat <- subset(motif.mpra.dat, geneSymbol==tf, select=c(geneSymbol,alleleDiff,SNP,LogSkew,mpra_sig))
+
+skew_corr <- ggplot(data=top.tf.dat, aes(x=alleleDiff,y=LogSkew)) + geom_point(color=celltype_color) + geom_smooth(method="lm",colour=celltype_color) + theme_bw() +
+  labs(title = paste0("Correlation between motifbreakr allelediff and LogSkew for ", tf), 
+       subtitle= paste0("Cell type: ", celltype, " ; motif db: ", motif_db), 
+       caption = "TF Binding: All TF binding original LogSkew")
+print(skew_corr)
+
+plot.name <- paste0("Corr_allelediff_LogSkew_", tf,"_", celltype,"_", motif_db, ".pdf")
+plot.loc <- paste0(plots.dir,"motifbreakr/tcell")
+ggsave(plot.name,plot = skew_corr, path = plot.loc, width = 7, height = 7)
+}
+```
+
+## Jurkat analysis
+
+### Set up
+
+Set up Jurkat MPRA and the motifbreakr results 
+```{r jurkat set up}
+# Do this for another cell type
+# Set up cell type
+celltype <- "Unstimulated Jurkat"
+celltype_dir <- "unstim_jurkat"
+rna_cell.type <- "unstim_jurkat"
+# Set up directories for tables
+mpra.dir.2 <- paste0(data.dir, mpra.name2,"_mpra_merge_hg38_filtered.txt")
+motifbreakr_dir <- paste0(data.dir,"motifbreakr/",motifbreakr.name,".motifbreakr.results.txt")
+# Set up motif db option
+motif_db <- "hocomoco"
+celltype_color <- "#5D93CD"
+```
+
+### import and reformat data
+
+Import motifbreakR and MPRA tables and reformat them to be used in this analysis
+```{r jurkat import data}
+#########################
+# Creating a data set with motif data and MPRA data
+#########################
+
+# Import motif data
+motif.dat <- read.table(motifbreakr_dir, sep="\t", header=T)
+
+# Import  MPRA
+mpra <- read.table(paste0(mpra.dir.2), sep="\t", header=T)
+
+# eliminate NAs from FC column
+#mpra <- subset(mpra, is.na(A.log2FC)==FALSE & is.na(B.log2FC)==FALSE)
+# Lose 6 rows in data set
+# Make fold change filter with top FC value >1. THIS FILTER WITH SIGNIFICANTLY CHANGE RESULTS. 
+#for(c in 1:nrow(mpra)){
+#  if(abs(mpra$A.log2FC[c]) >= abs(mpra$B.log2FC[c])){
+#    mpra$max.abs.log2FC[c] <- abs(mpra$A.log2FC[c])
+#  }else{mpra$max.abs.log2FC[c] <- abs(mpra$B.log2FC[c])
+#  }
+# }
+# Hash out this line of code to remove fold change filter. If you turn this filter on you must also turn the sample size filter on so that there are a sufficent # of observations for each t-test
+# mpra <- subset(mpra, max.abs.log2FC >= 1)
+# With FC cutoff of 1 only 2192 out of ~18000 variants left!
+# With FC cutoff of 0.5 only 6430 out of ~18000 variants left!
+
+# Makes geneSymbol (TF name) all uppercase
+motif.dat$geneSymbol <- toupper(motif.dat$geneSymbol)
+# make geneSymbol (TF Name) change from slash / to underscore so that the plots can save
+motif.dat$geneSymbol <- gsub("/","_",motif.dat$geneSymbol)
+
+# Filter by genes seen in RNAseq data (hash out the line below to eliminate the RNAseq filter). This is now going to be applied downstream after the t-test data
+# motif.dat <- merge(motif.dat,get(paste0(rna_cell.type,"_TPM")),by="geneSymbol")
+
+# Subset the motif data
+motif.dat<-subset(motif.dat,  select=c(seqnames, end, REF, ALT,SNP_id, geneSymbol,scoreRef ,scoreAlt, alleleDiff))
+# Subset MPRA
+mpra <- subset(mpra, select=c(SNP,A.log2FC,B.log2FC,LogSkew,mpra_sig,rsid,ref_allele,alt_allele))
+
+######## code for merging mpra and motifbreakr by chromosome and position ########
+# Get rid of the chr in motifbreakr SNP_id column to conform with mpra SNP column
+motif.dat$SNP <- gsub("chr","",motif.dat$SNP_id)
+# Merge Motifbreakr and MPRA ( we expect a similar number to the 61570 that are in the motif.dat right now (example run not represenative of all runs))
+motif.mpra.dat<-merge(motif.dat, mpra, by="SNP", all.x=T, all.y=T)
+# 61579. Probably due to mpra duplicates. 
+# An issue here is that there are variants in MPRA with SNP names with multiple alternate alleles, but that doesn't seem to be a huge issue. 
+
+####### code for merging by rsid which is not used anymore #########
+# Create a SNP column for the motifbreakr data (used to merge with MPRA)
+# motif.dat$rsid<- motif.dat$SNP_id
+# Merge Motifbreakr and MPRA
+# motif.mpra.dat<-merge(motif.dat, mpra, by="rsid", all.x=T, all.y=F)
+
+# Make sure mpra data is only the mpra_sig categories that we want
+motif.mpra.dat <- subset(motif.mpra.dat, mpra_sig %in% c("Enhancer_Skew","Enhancer_nSkew","nEnhancer_nSkew"))
+# Create emVar not emVar column
+motif.mpra.dat$variant_skew <- ifelse(motif.mpra.dat$mpra_sig == "Enhancer_Skew", "emVar", "non_emVar")
+
+# Make sure alleles for Motifbreakr and MPRA are the same 
+# Rename the columns 
+motif.mpra.dat$motifbreakr_ref <- motif.mpra.dat$REF
+motif.mpra.dat$mpra_ref <- motif.mpra.dat$ref_allele
+# Create a column with a 1 when the motifbreakr and mpra alleles match (Improve this loop)
+motif.mpra.dat$ref_agree <- NA
+motif.mpra.dat$ref_agree <- as.integer(motif.mpra.dat$motifbreakr_ref == motif.mpra.dat$mpra_ref)
+# Subset to only variants in which the reference allele in the MPRA and motifbreakr match
+motif.mpra.dat <- subset(motif.mpra.dat, ref_agree==1)
+
+# Make sure alleles for Motifbreakr and MPRA are the same 
+# Rename the columns 
+motif.mpra.dat$motifbreakr_alt <- motif.mpra.dat$ALT
+motif.mpra.dat$mpra_alt <- motif.mpra.dat$alt_allele
+# Create a column with a 1 when the motifbreakr and mpra alleles match (Improve this loop)
+motif.mpra.dat$alt_agree <- NA
+motif.mpra.dat$alt_agree <- as.integer(motif.mpra.dat$motifbreakr_alt == motif.mpra.dat$mpra_alt)
+# Subset to only variants in which the alternate allele in the MPRA and motifbreakr match
+motif.mpra.dat <- subset(motif.mpra.dat, alt_agree==1)
+
+# Add back in the variants without motifbreakr alleles
+motif.mpra.dat<-merge(motif.mpra.dat, mpra, by=names(mpra), all.x=T, all.y=T)
+
+# Generate unique MPRA sites 
+motif.mpra.dat$unique_snp_tf <- paste0(motif.mpra.dat$seqnames,":",motif.mpra.dat$end,":",
+                                    motif.mpra.dat$REF,":",motif.mpra.dat$ALT,"_",motif.mpra.dat$geneSymbol)
+motif.mpra.dat<-motif.mpra.dat[order(-abs(motif.mpra.dat$alleleDiff)),]
+motif.mpra.dat<-motif.mpra.dat[!duplicated(motif.mpra.dat$unique_snp_tf),]
+
+write.table(motif.mpra.dat, paste0(data.dir,"motifbreakr/jurkat/", "motif.mpra.dat_",celltype_dir,"_",motif_db,".txt"), row.names=FALSE,col.names=TRUE,sep="\t", quote=F)
+
+
+TF_list <-  unique(motif.mpra.dat$geneSymbol)
+
+##################
+
+# Plots which flip the sign of logskew for negative binders and using a binary readout for all differential TF binding
+
+##################
+
+# Create the TF bind or not bind data with a column for LogSkew, SNP and a column for each TF with the 
+
+TF_all_bind_data <- subset(motif.mpra.dat, select=c(geneSymbol,LogSkew,SNP,alleleDiff))
+# Pivot the data to wide format using tidyr::pivot_wider
+TF_all_bind_data <- TF_all_bind_data %>%
+  pivot_wider(names_from = geneSymbol, values_from = alleleDiff)
+
+TF_all_bind_data <- unique(TF_all_bind_data)
+
+# The filter for the number of observations needed to have sufficient sample size for each TF
+TF_all_bind_data <- TF_all_bind_data[, (colSums(!is.na(TF_all_bind_data)) >= 5)==TRUE]
+# If you combine this with the activity filter the results really change a lot
+
+#For each MPRA variant, find the fold change of the allele with the largest absolute fold change
+# This creates a column full of NAs for the loop to fill
+mpra$max_abs_fc <- NA
+# This loop calculates the column of max_abs_fc. It takes the two alleles A and B and calculates which one's absolute value is larger. That larger value is the value of the new column (can be positive or negative). 
+for(i in 1:nrow(mpra)){
+  if(abs(mpra[i,]$A.log2FC)>abs(mpra[i,]$B.log2FC)){
+    mpra[i,]$max_abs_fc<-mpra[i,]$A.log2FC
+  }else{
+    mpra[i,]$max_abs_fc<-mpra[i,]$B.log2FC
+  }
+}
+
+# Add back in the varaints which bind to no TFs
+logskew_fc_all_vars <- subset(mpra, select=c(SNP,LogSkew,max_abs_fc))
+
+TF_all_bind_data <- merge(logskew_fc_all_vars,TF_all_bind_data, by=c("SNP","LogSkew"), all.x=T)
+
+write.table(TF_all_bind_data, paste0(data.dir,"motifbreakr/jurkat/", "TF_all_bind_data_",celltype_dir,"_",motif_db,".txt"), row.names=FALSE,col.names=TRUE,sep="\t", quote=F)
+```
+
+### analysis loop
+Motifbreakr analysis loop for jukat cells
+```{r jurkat analysis loop}
+# TF list 
+TF_list <- names(TF_all_bind_data)
+TF_list <- TF_list[4:length(TF_list)] 
+
+# Create test with different samples of flipping the same amount of variants in the no bind as you do in the yes bind.
+# Now create a data frame with p value and effect size for all the TFs. 
+t.test.all.bind.motif.dat <- NULL
+hundred.p.values.per.tf <- data.frame(p.val=1:100)
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+for(tf in TF_list){
+
+temp_data<-TF_all_bind_data
+# How many variants which bind to this particular tf are being flipped?
+# Bind to TF 
+specific_tf_data <- subset(temp_data,  select=c("SNP","LogSkew","max_abs_fc",tf))
+# This is the sample size of the allele which are flipped for the tfs which bind to a particular TF. Change this sign as well as the one below to flip the plot
+size_flipped_allelediff <- nrow(subset(specific_tf_data,  is.na(specific_tf_data[[tf]])==FALSE & specific_tf_data[[tf]]>=0))
+
+# Find the variants which bind to a particular tf
+yes_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])!=TRUE)
+# flip the signs of logskew for tfs that bind and tfs that don't no bind (which we don't even nromally flip) separately. Change the sign with the one above in order to flip the plot
+yes_tf_bind$LogSkew <- ifelse(!is.na(yes_tf_bind[[tf]]) & yes_tf_bind[[tf]] >= 0, -yes_tf_bind$LogSkew, yes_tf_bind$LogSkew)
+# Find the tfs that do not bind to a particular tf
+no_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])==TRUE)
+# Find the size of rows that must be flipped by calculating the percent of rows that were flipped from the variants which do bind to a particular tf and multiplying it by the rows of the variants that do not bind 
+size_flip_no_bind <- nrow(no_tf_bind)* (size_flipped_allelediff/nrow(yes_tf_bind))
+# Pick a certain amount of rows to flip from those TFs which do not bind. 
+rows_to_flip <- sample(1:nrow(no_tf_bind), size=size_flip_no_bind, replace=FALSE)
+# Now flip the LogSkew of the rows which I picked for the variants which do not bind to that TF
+no_tf_bind$LogSkew[rows_to_flip] <- -no_tf_bind$LogSkew[rows_to_flip]
+
+# Number of variants which bind to this particular tf
+n <- length(yes_tf_bind$LogSkew)
+# Calculating effect size (Cohen's D)
+d <- (mean(yes_tf_bind$LogSkew, na.rm = TRUE) - mean(no_tf_bind$LogSkew, na.rm = TRUE)) / (sqrt(((sd(yes_tf_bind$LogSkew, na.rm = TRUE)^2)+(sd(no_tf_bind$LogSkew, na.rm = TRUE)^2)/2)))
+mu1 <- mean(yes_tf_bind$LogSkew, na.rm = TRUE)
+sd1 <- sd(yes_tf_bind$LogSkew, na.rm = TRUE)
+mu0 <- mean(no_tf_bind$LogSkew, na.rm = TRUE)
+sd0 <- sd(no_tf_bind$LogSkew, na.rm = TRUE)
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+skew.bind.t.test <- t.test(x=yes_tf_bind$LogSkew, y= no_tf_bind$LogSkew,alternative = c("two.sided"))
+p <- skew.bind.t.test$p.value
+t <- skew.bind.t.test$statistic
+df <- skew.bind.t.test$parameter
+
+t.test.all.bind.motif.dat <- rbind(t.test.all.bind.motif.dat, data.frame(tf,p,d,n,t,df,mu1,sd1,mu0,sd0))
+t.test.all.bind.motif.dat
+
+# Repeat t-test 100 times
+#################################
+for(i in 1:100){
+
+# How many variants which bind to this particular tf are being flipped?
+# Bind to TF 
+specific_tf_data <- subset(temp_data,  select=c("SNP","LogSkew","max_abs_fc",tf))
+# This is the sample size of the allele which are flipped for the tfs which bind to a particular TF. Change this sign as well as the one below to flip the plot
+size_flipped_allelediff <- nrow(subset(specific_tf_data,  is.na(specific_tf_data[[tf]])==FALSE & specific_tf_data[[tf]]>=0))
+
+# Find the variants which bind to a particular tf
+yes_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])!=TRUE)
+# flip the signs of logskew for tfs that bind and tfs that don't no bind (which we don't even nromally flip) separately. Change the sign with the one above in order to flip the plot
+yes_tf_bind$LogSkew <- ifelse(!is.na(yes_tf_bind[[tf]]) & yes_tf_bind[[tf]] >= 0, -yes_tf_bind$LogSkew, yes_tf_bind$LogSkew)
+# Find the tfs that do not bind to a particular tf
+no_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])==TRUE)
+# Find the size of rows that must be flipped by calculating the percent of rows that were flipped from the variants which do bind to a particular tf and multiplying it by the rows of the variants that do not bind 
+size_flip_no_bind <- nrow(no_tf_bind)* (size_flipped_allelediff/nrow(yes_tf_bind))
+# Pick a certain amount of rows to flip from those TFs which do not bind. 
+rows_to_flip <- sample(1:nrow(no_tf_bind), size=size_flip_no_bind, replace=FALSE)
+# Now flip the LogSkew of the rows which I picked for the variants which do not bind to that TF
+no_tf_bind$LogSkew[rows_to_flip] <- -no_tf_bind$LogSkew[rows_to_flip]
+
+# Calculating effect size (Cohen's D)
+d <- (mean(yes_tf_bind$LogSkew, na.rm = TRUE) - mean(no_tf_bind$LogSkew, na.rm = TRUE)) / (sqrt(((sd(yes_tf_bind$LogSkew, na.rm = TRUE)^2)+(sd(no_tf_bind$LogSkew, na.rm = TRUE)^2)/2)))
+
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+skew.bind.t.test <- t.test(x=yes_tf_bind$LogSkew, y= no_tf_bind$LogSkew,alternative = c("two.sided"))
+p <- skew.bind.t.test$p.value
+hundred.p.values.per.tf[[tf]][i] <- p
+}
+#################################
+
+ }
+
+# Get a subsetted list of tfs which only have significant p-values
+sig_tfs <- data.frame(names(hundred.p.values.per.tf)[2:ncol(hundred.p.values.per.tf)])
+names(sig_tfs) <- "tf"
+for (i in 1:length(TF_list)) {
+sig_tfs$max.p[i] <- max(hundred.p.values.per.tf[[TF_list[[i]]]])
+}
+
+
+t.test.all.bind.motif.dat <- merge(t.test.all.bind.motif.dat,sig_tfs,by="tf")
+
+write.table(t.test.all.bind.motif.dat, paste0(data.dir,"motifbreakr/jurkat/", "t.test.all.bind.motif.dat_",celltype_dir,"_",motif_db,".txt"), row.names=FALSE,col.names=TRUE,sep="\t")
+
+# Filter by genes seen in RNAseq data (hash out the line below to eliminate the RNAseq filter)
+t.test.all.bind.motif.dat <- merge(t.test.all.bind.motif.dat,get(paste0(rna_cell.type,"_TPM")),by="tf")
+```
+
+### plots
+Motifbreakr analysis plots for jurkat cells
+```{r jurkat plots}
+# Creating labels for the plot below
+t.test.all.bind.motif.dat_ranked <- t.test.all.bind.motif.dat[order(t.test.all.bind.motif.dat$p),]
+t.test.all.bind.motif.dat_ranked$rank <- c(1:nrow(t.test.all.bind.motif.dat_ranked))
+rows <- 0.15*nrow(t.test.all.bind.motif.dat_ranked)
+labels <- t.test.all.bind.motif.dat_ranked$tf[1:rows]
+
+# Plot of t-test p-values and effect size of LogSkew comparing SNPs which bind and do not bind to TF
+plot1 <- ggplot(data=t.test.all.bind.motif.dat_ranked , aes(x = d, y=(-log10(p)))) + geom_point(colour = celltype_color) + geom_text_repel(data=subset(t.test.all.bind.motif.dat_ranked , tf==labels), aes(label=tf), max.overlaps = 50) + theme_bw() + xlab("Cohen's D (effect size)") + ylab("T-test log10 p-value") + 
+  labs(title="", subtitle = "LogSkew comparing SNPs which bind and do not bind to TF", caption = paste0("Cell type: ", celltype, " ; motif db: ", motif_db)) + 
+  theme(panel.grid.minor = element_blank()) + geom_point(data=subset(t.test.all.bind.motif.dat_ranked, max.p>=0.05), colour = "gray50")
+print(plot1)
+
+plots.loc <- paste0(plots.dir,"motifbreakr/",celltype_dir)
+plot.name <- paste0("Volcano_plot_", celltype,"_", motif_db, "_all_flipped_binding", "", ".pdf")
+ggsave(plot.name,plot = plot1, path = plots.loc)
+
+
+t.test.all.bind.motif.dat_ranked <- t.test.all.bind.motif.dat[order(t.test.all.bind.motif.dat$p),]
+top_tf <- t.test.all.bind.motif.dat_ranked$tf[1]
+top_ten_tfs <- t.test.all.bind.motif.dat_ranked$tf[1:10]
+
+
+for (tf in top_ten_tfs){
+  top.tf.dat <- subset(motif.mpra.dat, geneSymbol==tf, select=c(geneSymbol,alleleDiff,SNP,LogSkew,mpra_sig))
+  
+skew_corr <- ggplot(data=top.tf.dat, aes(x=alleleDiff,y=LogSkew)) + geom_point(color=celltype_color) + geom_smooth(method="lm",colour=celltype_color) + theme_bw() +
+  labs(title = paste0("Correlation between motifbreakr allelediff and LogSkew for ", tf), 
+       subtitle= paste0("Cell type: ", celltype, " ; motif db: ", motif_db), 
+       caption = "TF Binding: All TF binding original LogSkew")
+
+print(skew_corr)
+
+plots.loc <- paste0(plots.dir,"motifbreakr/",celltype_dir)
+plot.name <- paste0("Corr_allelediff_LogSkew_", tf,"_", celltype,"_", motif_db, ".pdf")
+ggsave(plot.name,plot = skew_corr, path = plots.loc)
+}
+```
+
+## motifbreakR enrichment analysis with each disease
+
+### Enrichment analysis loop for all diseases
+
+Switch back to primary t-cell labels
+```{r}
+cell_type <- "tcell"
+motif_db <- "hocomoco"
+rna_cell.type <- "tcell"
+```
+
+motifbreakR analysis loop which calculates enrichments for each disease
+```{r by disease}
+
+disease_list <- c("MS","RA","Psoriasis","T1D","IBD","UC","Crohns")
+
+for (disease in disease_list){
+
+# Import motif data
+motif.dat <- read.table(motifbreakr_dir, sep="\t", header=T)
+
+# Import  MPRA
+mpra <- read.table(mpra.dir.1, sep="\t", header=T)
+  
+# subset the mpra to a particular disease
+mpra <- subset(mpra, is.na(get(paste0(disease,"_pics")))==FALSE)
+
+# Makes geneSymbol (TF name) all uppercase
+motif.dat$geneSymbol <- toupper(motif.dat$geneSymbol)
+# make geneSymbol (TF Name) change from slash / to underscore so that the plots can save
+motif.dat$geneSymbol <- gsub("/","_",motif.dat$geneSymbol)
+
+# Filter by genes seen in RNAseq data (hash out the line below to eliminate the RNAseq filter)
+# motif.dat <- merge(motif.dat,get(paste0(rna_cell.type,"_TPM")),by="geneSymbol")
+
+
+# Subset the motif data
+motif.dat<-subset(motif.dat,  select=c(seqnames, end, REF, ALT,SNP_id, geneSymbol,scoreRef ,scoreAlt, alleleDiff))
+# Subset MPRA
+mpra <- subset(mpra, select=c(SNP,A.log2FC,B.log2FC,LogSkew,mpra_sig,rsid,ref_allele,alt_allele))
+
+######## code for merging mpra and motifbreakr by chromosome and position ########
+# Get rid of the chr in motifbreakr SNP_id column to conform with mpra SNP column
+motif.dat$SNP <- gsub("chr","",motif.dat$SNP_id)
+# Merge Motifbreakr and MPRA ( we expect a similar number to the 61570 that are in the motif.dat right now (example run not represenative of all runs))
+motif.mpra.dat<-merge(motif.dat, mpra, by="SNP", all.x=T, all.y=F)
+# 61579. Probably due to mpra duplicates. 
+# An issue here is that there are variants in MPRA with SNP names with multiple alternate alleles, but that doesn't seem to be a huge issue. 
+
+####### code for merging by rsid which is not used anymore #########
+# Create a SNP column for the motifbreakr data (used to merge with MPRA)
+# motif.dat$rsid<- motif.dat$SNP_id
+# Merge Motifbreakr and MPRA
+# motif.mpra.dat<-merge(motif.dat, mpra, by="rsid", all.x=T, all.y=F)
+
+# Make sure mpra data is only the mpra_sig categories that we want
+motif.mpra.dat <- subset(motif.mpra.dat, mpra_sig %in% c("Enhancer_Skew","Enhancer_nSkew","nEnhancer_nSkew"))
+# Create emVar not emVar column
+motif.mpra.dat$variant_skew <- ifelse(motif.mpra.dat$mpra_sig == "Enhancer_Skew", "emVar", "non_emVar")
+
+# Make sure alleles for Motifbreakr and MPRA are the same 
+# Rename the columns 
+motif.mpra.dat$motifbreakr_alt <- motif.mpra.dat$ALT
+motif.mpra.dat$mpra_alt <- motif.mpra.dat$alt_allele
+# Create a column with a 1 when the motifbreakr and mpra alleles match (Improve this loop)
+motif.mpra.dat$alt_agree <- NA
+motif.mpra.dat$alt_agree <- as.integer(motif.mpra.dat$motifbreakr_alt == motif.mpra.dat$mpra_alt)
+# Subset to only variants in which the alternate allele in the MPRA and motifbreakr match
+motif.mpra.dat <- subset(motif.mpra.dat, alt_agree==1)
+# length(unique(motif.mpra.dat$SNP)) # 13078 variants with rsid. 13656 with SNP. (for example run of tcells and hocomoco)
+# Generate unique MPRA sites 
+motif.mpra.dat$unique_snp_tf <- paste0(motif.mpra.dat$seqnames,":",motif.mpra.dat$end,":",
+                                    motif.mpra.dat$REF,":",motif.mpra.dat$ALT,"_",motif.mpra.dat$geneSymbol)
+motif.mpra.dat<-motif.mpra.dat[order(-abs(motif.mpra.dat$alleleDiff)),]
+motif.mpra.dat<-motif.mpra.dat[!duplicated(motif.mpra.dat$unique_snp_tf),]
+
+TF_list <-  unique(motif.mpra.dat$geneSymbol)
+
+##################
+
+# Plots which flip the sign of logskew for negative binders and using a binary readout for all differential TF binding
+
+##################
+
+# Create the TF bind or not bind data with a column for LogSkew, SNP and a column for each TF with the 
+
+TF_all_bind_data <- subset(motif.mpra.dat, select=c(geneSymbol,LogSkew,SNP,alleleDiff))
+# Pivot the data to wide format using tidyr::pivot_wider
+TF_all_bind_data <- TF_all_bind_data %>%
+  pivot_wider(names_from = geneSymbol, values_from = alleleDiff)
+
+TF_all_bind_data <- unique(TF_all_bind_data)
+
+# The filter for the number of observations needed to have sufficient sample size for each TF
+TF_all_bind_data <- TF_all_bind_data[, (colSums(!is.na(TF_all_bind_data)) >= 5)==TRUE]
+# If you combine this with the activity filter the results really change a lot
+
+#For each MPRA variant, find the fold change of the allele with the largest absolute fold change
+# This creates a column full of NAs for the loop to fill
+mpra$max_abs_fc <- NA
+# This loop calculates the column of max_abs_fc. It takes the two alleles A and B and calculates which one's absolute value is larger. That larger value is the value of the new column (can be positive or negative). 
+for(i in 1:nrow(mpra)){
+  if(abs(mpra[i,]$A.log2FC)>abs(mpra[i,]$B.log2FC)){
+    mpra[i,]$max_abs_fc<-mpra[i,]$A.log2FC
+  }else{
+    mpra[i,]$max_abs_fc<-mpra[i,]$B.log2FC
+  }
+}
+
+# Add back in the varaints which bind to no TFs
+logskew_fc_all_vars <- subset(mpra, select=c(SNP,LogSkew,max_abs_fc))
+
+TF_all_bind_data <- merge(logskew_fc_all_vars,TF_all_bind_data, by=c("SNP","LogSkew"), all.x=T)
+
+# TF list 
+TF_list <- names(TF_all_bind_data)
+TF_list <- TF_list[4:length(TF_list)] 
+
+# Create test with different samples of flipping the same amount of variants in the no bind as you do in the yes bind.
+# Now create a data frame with p value and effect size for all the TFs. 
+t.test.all.bind.motif.dat <- NULL
+hundred.p.values.per.tf <- NULL
+hundred.p.values.per.tf <- data.frame(p.val=1:100)
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+for(tf in TF_list){
+
+temp_data<-TF_all_bind_data
+# How many variants which bind to this particular tf are being flipped?
+# Bind to TF 
+specific_tf_data <- subset(temp_data,  select=c("SNP","LogSkew","max_abs_fc",tf))
+# This is the sample size of the allele which are flipped for the tfs which bind to a particular TF. Change this sign as well as the one below to flip the plot
+size_flipped_allelediff <- nrow(subset(specific_tf_data,  is.na(specific_tf_data[[tf]])==FALSE & specific_tf_data[[tf]]>=0))
+
+# Find the variants which bind to a particular tf
+yes_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])!=TRUE)
+# flip the signs of logskew for tfs that bind and tfs that don't no bind (which we don't even nromally flip) separately. Change the sign with the one above in order to flip the plot
+yes_tf_bind$LogSkew <- ifelse(!is.na(yes_tf_bind[[tf]]) & yes_tf_bind[[tf]] >= 0, -yes_tf_bind$LogSkew, yes_tf_bind$LogSkew)
+# Find the tfs that do not bind to a particular tf
+no_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])==TRUE)
+# Find the size of rows that must be flipped by calculating the percent of rows that were flipped from the variants which do bind to a particular tf and multiplying it by the rows of the variants that do not bind 
+size_flip_no_bind <- nrow(no_tf_bind)* (size_flipped_allelediff/nrow(yes_tf_bind))
+# Pick a certain amount of rows to flip from those TFs which do not bind. 
+rows_to_flip <- sample(1:nrow(no_tf_bind), size=size_flip_no_bind, replace=FALSE)
+# Now flip the LogSkew of the rows which I picked for the variants which do not bind to that TF
+no_tf_bind$LogSkew[rows_to_flip] <- -no_tf_bind$LogSkew[rows_to_flip]
+
+# Number of variants which bind to this particular tf
+n <- length(yes_tf_bind$LogSkew)
+# Calculating effect size (Cohen's D)
+d <- (mean(yes_tf_bind$LogSkew, na.rm = TRUE) - mean(no_tf_bind$LogSkew, na.rm = TRUE)) / (sqrt(((sd(yes_tf_bind$LogSkew, na.rm = TRUE)^2)+(sd(no_tf_bind$LogSkew, na.rm = TRUE)^2)/2)))
+mu1 <- mean(yes_tf_bind$LogSkew, na.rm = TRUE)
+sd1 <- sd(yes_tf_bind$LogSkew, na.rm = TRUE)
+mu0 <- mean(no_tf_bind$LogSkew, na.rm = TRUE)
+sd0 <- sd(no_tf_bind$LogSkew, na.rm = TRUE)
+
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+skew.bind.t.test <- t.test(x=yes_tf_bind$LogSkew, y= no_tf_bind$LogSkew,alternative = c("two.sided"))
+t <- skew.bind.t.test$statistic
+df <- skew.bind.t.test$parameter
+p <- skew.bind.t.test$p.value
+
+t.test.all.bind.motif.dat <- rbind(t.test.all.bind.motif.dat, data.frame(tf,p,d,n,t,df,mu1,sd1,mu0,sd0))
+t.test.all.bind.motif.dat
+
+# Repeat t-test 100 times
+#################################
+for(i in 1:100){
+
+# How many variants which bind to this particular tf are being flipped?
+# Bind to TF 
+specific_tf_data <- subset(temp_data,  select=c("SNP","LogSkew","max_abs_fc",tf))
+# This is the sample size of the allele which are flipped for the tfs which bind to a particular TF. Change this sign as well as the one below to flip the plot
+size_flipped_allelediff <- nrow(subset(specific_tf_data,  is.na(specific_tf_data[[tf]])==FALSE & specific_tf_data[[tf]]>=0))
+
+# Find the variants which bind to a particular tf
+yes_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])!=TRUE)
+# flip the signs of logskew for tfs that bind and tfs that don't no bind (which we don't even nromally flip) separately. Change the sign with the one above in order to flip the plot
+yes_tf_bind$LogSkew <- ifelse(!is.na(yes_tf_bind[[tf]]) & yes_tf_bind[[tf]] >= 0, -yes_tf_bind$LogSkew, yes_tf_bind$LogSkew)
+# Find the tfs that do not bind to a particular tf
+no_tf_bind <- subset(specific_tf_data, is.na(specific_tf_data[[tf]])==TRUE)
+# Find the size of rows that must be flipped by calculating the percent of rows that were flipped from the variants which do bind to a particular tf and multiplying it by the rows of the variants that do not bind 
+size_flip_no_bind <- nrow(no_tf_bind)* (size_flipped_allelediff/nrow(yes_tf_bind))
+# Pick a certain amount of rows to flip from those TFs which do not bind. 
+rows_to_flip <- sample(1:nrow(no_tf_bind), size=size_flip_no_bind, replace=FALSE)
+# Now flip the LogSkew of the rows which I picked for the variants which do not bind to that TF
+no_tf_bind$LogSkew[rows_to_flip] <- -no_tf_bind$LogSkew[rows_to_flip]
+
+# Calculating effect size (Cohen's D)
+d <- (mean(yes_tf_bind$LogSkew, na.rm = TRUE) - mean(no_tf_bind$LogSkew, na.rm = TRUE)) / (sqrt(((sd(yes_tf_bind$LogSkew, na.rm = TRUE)^2)+(sd(no_tf_bind$LogSkew, na.rm = TRUE)^2)/2)))
+
+# T-test to test whether the distribution of Allele.Diff differs between emVars and other variants 
+skew.bind.t.test <- t.test(x=yes_tf_bind$LogSkew, y= no_tf_bind$LogSkew,alternative = c("two.sided"))
+p <- skew.bind.t.test$p.value
+hundred.p.values.per.tf[[tf]][i] <- p
+}
+#################################
+
+ }
+
+
+# Get a subsetted list of tfs which only have significant p-values
+sig_tfs <- data.frame(names(hundred.p.values.per.tf)[2:ncol(hundred.p.values.per.tf)])
+names(sig_tfs) <- "tf"
+for (i in 1:length(TF_list)) {
+sig_tfs$max.p[i] <- max(hundred.p.values.per.tf[[TF_list[[i]]]])
+}
+
+# Creates an adjusted p-value which is more rigorous
+t.test.all.bind.motif.dat$adj.p <- p.adjust(t.test.all.bind.motif.dat$p, method = "hochberg", n = length(t.test.all.bind.motif.dat$p))
+
+t.test.all.bind.motif.dat <- merge(t.test.all.bind.motif.dat,sig_tfs,by="tf")
+
+# Write the table
+write.table(t.test.all.bind.motif.dat, paste0(data.dir,"motifbreakr/disease_comparison/", "t.test.all.bind.motif.dat_",cell_type,"_",disease,".txt"), row.names=FALSE,col.names=TRUE,sep="\t")
+
+
+# Filter by genes seen in RNAseq data (hash out the line below to eliminate the RNAseq filter)
+t.test.all.bind.motif.dat <- merge(t.test.all.bind.motif.dat,get(paste0(rna_cell.type,"_TPM")),by="tf")
+
+top_sample_size <- t.test.all.bind.motif.dat[order(-t.test.all.bind.motif.dat$n),]
+
+if(disease=="MS"){
+  key_tfs <- c("RELB", "GFI1B", "GATA3")
+}
+if(disease=="Crohns"){
+  key_tfs <- c("ZNF85")
+}
+if(disease=="IBD"){
+  key_tfs <- c("GFI1B", "ZNF85")
+}
+if(disease=="T1D"){
+  key_tfs <- c("NFKB1","NFKB2","STAT3")
+}
+if(disease=="UC"){
+  key_tfs <- c("JUN", "FOSL2")
+}
+if(disease=="Psoriasis"){
+  key_tfs <- c("ATF1", "GFI1B", "CLOCK")
+}
+
+for(factor in key_tfs){
+   sample_size <- subset(t.test.all.bind.motif.dat, tf==factor)$n
+yes_bind_sample_size_hist <- ggplot(data=t.test.all.bind.motif.dat, aes(n)) + 
+  geom_histogram(binwidth = 10, fill="#5D93CD") + theme_bw() +
+  labs(title="Sample size of variants which bind to each tf",subtitle=paste0("Only variants in ", disease, " loci"),caption= paste0(factor, " binds to ",sample_size, " variants")) + geom_vline(xintercept = sample_size, color="#E14A4A") +
+  annotate("text", x=(sample_size-2), y=50, label=factor, angle=90) + 
+  annotate("text", x=(sample_size + 2), y=50, label=sample_size, angle=90)
+print(yes_bind_sample_size_hist) 
+}
+
+
+# Lowest number of variants which bind to a particular TF
+min(t.test.all.bind.motif.dat$n)
+
+# Creating labels for the plot below
+t.test.all.bind.motif.dat_ranked <- t.test.all.bind.motif.dat[order(t.test.all.bind.motif.dat$p),]
+t.test.all.bind.motif.dat_ranked$rank <- c(1:nrow(t.test.all.bind.motif.dat_ranked))
+rows <- 0.15*nrow(t.test.all.bind.motif.dat_ranked)
+labels <- t.test.all.bind.motif.dat_ranked$tf[1:rows]
+
+# Plot of t-test p-values and effect size of LogSkew comparing SNPs which bind and do not bind to TF
+plot1 <- ggplot(data=t.test.all.bind.motif.dat_ranked , aes(x = d, y=(-log10(p)))) + geom_point(colour = "#5D93CD") + geom_text_repel(data=subset(t.test.all.bind.motif.dat_ranked , tf==labels), aes(label=tf), max.overlaps = 50) + theme_bw() + xlab("Cohen's D (effect size)") + ylab("T-test log10 p-value") + 
+  labs(title=paste0(disease, " variants only"), subtitle = "LogSkew comparing SNPs which bind and do not bind to TF", caption = paste0("Cell type: ", cell_type, " ; motif db: ", motif_db)) + 
+  theme(panel.grid.minor = element_blank()) + geom_point(data=subset(t.test.all.bind.motif.dat_ranked, max.p>=0.05), colour = "gray50")
+print(plot1)
+
+plots.loc <- paste0(plots.dir, "motifbreakr/disease_comparison/", cell_type,"/",disease)
+plot.name <- paste0("Volcano_plot_", cell_type,"_", motif_db, "_all_flipped_binding", "_", disease, ".pdf")
+ ggsave(plot.name,plot = plot1, path = plots.loc)
+
+
+t.test.all.bind.motif.dat_ranked <- t.test.all.bind.motif.dat[order(t.test.all.bind.motif.dat$p),]
+top_tf <- t.test.all.bind.motif.dat_ranked$tf[1]
+top_ten_tfs <- t.test.all.bind.motif.dat_ranked$tf[1:10]
+
+
+for (tf in top_ten_tfs){
+  top.tf.dat <- subset(motif.mpra.dat, geneSymbol==tf, select=c(geneSymbol,alleleDiff,SNP,LogSkew,mpra_sig))
+  
+skew_corr <- ggplot(data=top.tf.dat, aes(x=alleleDiff,y=LogSkew)) + geom_point(color="#5D93CD") + geom_smooth(method="lm",colour="#5D93CD") + theme_bw() +
+  labs(title = paste0("Correlation between motifbreakr allelediff and LogSkew for ", tf), 
+       subtitle= paste0("Cell type: ", "cell_type", " ; motif db: ", "motif_db"), 
+       caption = "TF Binding: All TF binding original LogSkew")
+
+# print(skew_corr)
+
+plots.loc <- paste0(plots.dir,"motifbreakr/disease_comparison/", cell_type,"/", disease)
+plot.name <- paste0("Corr_allelediff_LogSkew_", tf,"_", cell_type,"_", motif_db,"_", disease, ".pdf")
+ggsave(plot.name,plot = skew_corr, path = plots.loc)
+}
+
+
+} # End of disease loop
+```
+
+### Format data and create plots
+
+1. Create a master data set with all the data for each disease
+
+2. Gorgeously visualize the data with brilliant plots
+
+```{r by disease data and plots}
+####### create a master data set with all the disease p-values and effect sizes ########
+ 
+diseases <- c("MS","RA","Psoriasis","T1D","IBD","UC","Crohns")
+
+all.disease.t.test.data <- data.frame(tf = character(0))
+
+for (disease in diseases) {
+  # Read data 
+  file_path <- paste0(data.dir,"motifbreakr/disease_comparison/", "t.test.all.bind.motif.dat_",cell_type,"_",disease,".txt")
+  t.test.data <- read.table(file_path, sep="\t", header=TRUE)
+  names(t.test.data) <- c("tf", paste0(disease, "_p"), paste0(disease, "_d"),paste0(disease, "_n"), paste0(disease, "_t"), paste0(disease, "_df"), paste0(disease, "_mu1"), paste0(disease, "_sd1"), paste0(disease, "_mu0"), paste0(disease, "_sd0"), paste0(disease, "_adj.p"),paste0(disease, "_max.p"))
+  
+  # Merge data
+  if (nrow(all.disease.t.test.data) == 0) {
+    all.disease.t.test.data <- t.test.data
+  } else {
+    all.disease.t.test.data <- merge(all.disease.t.test.data, t.test.data, by="tf", all.x=TRUE, all.y=TRUE)
+  }
+}
+
+#### other type of data structure ####
+
+diseases <- c("MS","RA","Psoriasis","T1D","IBD","UC","Crohns")
+
+all.disease.t.test.data <- data.frame()
+
+for (disease in diseases) {
+  # Read data 
+  file_path <- paste0(data.dir,"motifbreakr/disease_comparison/",
+                      "t.test.all.bind.motif.dat",
+                      "_",cell_type,"_", disease,".txt")
+  t.test.data <- read.table(file_path, sep="\t", header=TRUE)
+  names(t.test.data) <- c("tf", "p", "d","n","t",	"df",	"mu1",	"sd1",	"mu0",	"sd0", "adj_p","max.p")
+  
+  # Add disease column
+  t.test.data$disease <- disease
+  
+  # Merge data
+  if (nrow(all.disease.t.test.data) == 0) {
+    all.disease.t.test.data <- t.test.data
+  } else {
+    all.disease.t.test.data <- rbind(all.disease.t.test.data, t.test.data)
+  }
+}
+
+write.table(all.disease.t.test.data, paste0(data.dir,"motifbreakr/disease_comparison/", "t.test.all.bind.motif.dat_","all_disease",".txt"), row.names=FALSE,col.names=TRUE,sep="\t")
+
+# data structure optimized by chat gpt
+##################
+
+up_top_tfs <- list()
+down_top_tfs <- list()
+
+for (z in diseases) {
+  # Filter data for the current disease
+  disease_data <- all.disease.t.test.data[all.disease.t.test.data$disease == z, ]
+
+  # Sort the filtered data by p-value
+  disease_data <- disease_data[order(disease_data$p), ]
+
+  # Extract top upregulated and downregulated TFs
+  up_top <- disease_data[disease_data$d >= 0, ]$tf[1:5]
+  down_top <- disease_data[disease_data$d <= 0, ]$tf[1:5]
+
+  # Store the results in lists
+  up_top_tfs[[z]] <- up_top
+  down_top_tfs[[z]] <- down_top
+}
+
+# Create a new data frame to store results
+result_df <- data.frame(disease = rep(diseases, each = 10),
+                        direction = rep(c("up", "down"), each = 5, times = 7),
+                        tf = NA)
+
+# Fill in the tf column with the extracted top TFs
+for (i in 1:length(diseases)) {
+  disease <- diseases[i]
+  up_indices <- which(result_df$disease == disease & result_df$direction == "up")
+  down_indices <- which(result_df$disease == disease & result_df$direction == "down")
+
+  result_df$tf[up_indices] <- up_top_tfs[[disease]]
+  result_df$tf[down_indices] <- down_top_tfs[[disease]]
+  
+}
+# Assign the populated result_df to top_tfs
+top_tfs <- result_df
+heatmap_tf_list <- unique(top_tfs$tf)
+all.disease.t.test.data.subset <- subset(all.disease.t.test.data, tf%in%heatmap_tf_list)
+##############################
+
+# Hierarchical clustering to organize the tfs in the dot plot
+# From this tutorial: https://uc-r.github.io/hc_clustering
+# Subset the data for only the effect size, disease and tf
+hierarchical.clustering.tf.dat <- subset(all.disease.t.test.data.subset, select=c(tf,d,disease))
+# Pivot so that the tfs are rows, diseases are the columns and values are the effect size
+hierarchical.clustering.tf.dat <- hierarchical.clustering.tf.dat %>% pivot_wider(names_from = disease, values_from = d) %>% data.frame()
+# Make the row names the tfs
+rownames(hierarchical.clustering.tf.dat) <- hierarchical.clustering.tf.dat$tf
+# Delete the row called tf
+hierarchical.clustering.tf.dat <- subset(hierarchical.clustering.tf.dat, select=-c(tf))
+# transpose the dataframe so that we can hierarchically cluster the diseases below
+hierarchical.clustering.disease.dat <- data.frame(t(hierarchical.clustering.tf.dat))
+# Standardize the data using scale
+hierarchical.clustering.tf.dat <- scale(hierarchical.clustering.tf.dat)
+# Create a dissimilarity matrix
+hierarchical.clustering.tf.dat <- dist(hierarchical.clustering.tf.dat, method = "euclidean")
+# Do hierarchical clustering
+hierarchical.clustering.tf.dat <- hclust(hierarchical.clustering.tf.dat, method = "complete" )
+# Plot the dendrogram for the clustered TFs (now a ggplot object)
+# plot(hierarchical.clustering.tf.dat, cex = 0.6, hang = -1)
+hierarchical.clustering.tf.dendrogram <- ggdendrogram(hierarchical.clustering.tf.dat, rotate = FALSE, theme_dendro = TRUE)
+hierarchical.clustering.tf.dendrogram
+
+ggsave(filename = paste0(cell_type,"_hierarchical.clustering.tf.dendrogram.pdf"),plot = hierarchical.clustering.tf.dendrogram, path = paste0(plots.dir,"motifbreakr/disease_comparison","/",cell_type), width=20,height=2)
+
+# Get the list of TFs in order
+tf.comparison.order <- hierarchical.clustering.tf.dat$labels[hierarchical.clustering.tf.dat$order]
+tf.comparison.order
+
+# Now hierarchically cluster the diseases
+# Standardize the data using scale
+hierarchical.clustering.disease.dat <- scale(hierarchical.clustering.disease.dat)
+# Create a dissimilarity matrix
+hierarchical.clustering.disease.dat <- dist(hierarchical.clustering.disease.dat, method = "euclidean")
+# Do hierarchical clustering
+hierarchical.clustering.disease.dat <- hclust(hierarchical.clustering.disease.dat, method = "complete" )
+# Plot the dendrogram for the clustered diseases
+# plot(hierarchical.clustering.disease.dat, cex = 0.6, hang = -1)
+hierarchical.clustering.disease.dendrogram <- ggdendrogram(hierarchical.clustering.disease.dat, rotate = FALSE, theme_dendro = TRUE) + scale_y_reverse(expand = c(0.2, 0))
+hierarchical.clustering.disease.dendrogram
+
+ggsave(filename = paste0(cell_type,"_hierarchical.clustering.disease.dendrogram.pdf"),plot = hierarchical.clustering.disease.dendrogram, path = paste0(plots.dir,"motifbreakr/disease_comparison","/",cell_type), width=6,height=2)
+
+# Get the list of diseases in order
+disease.comparison.order <- hierarchical.clustering.disease.dat$labels[hierarchical.clustering.disease.dat$order]
+disease.comparison.order
+
+# Make the tfs and diseases into factors to order them in the plot
+all.disease.t.test.data.subset$disease <- factor(all.disease.t.test.data.subset$disease, levels = rev(disease.comparison.order))
+all.disease.t.test.data.subset$tf <- factor(all.disease.t.test.data.subset$tf, levels = tf.comparison.order)
+
+# Create heatmap with the top 5 tfs for each disease using the effect size and p-value
+ttest_d_and_p_heatmap <- ggplot(data.frame(all.disease.t.test.data.subset), aes(x = tf, y = disease)) +
+  geom_point(aes(size=-log10(p), fill = d),shape = 21,color="black") + 
+  xlab("tf") + ylab("disease") + labs(title="t-test p-value and effect size heatmap by disease", subtitle="tcell") + scale_fill_gradient2(low="#5D93CD",mid="white",high="#E14A4A",midpoint = 0)  +
+  scale_x_discrete(guide = guide_axis(n.dodge=4)) + theme(plot.background = element_blank(),panel.background = element_blank())
+ttest_d_and_p_heatmap
+
+ggsave(filename = paste0(cell_type,"_ttest_d_and_p_heatmap.pdf"),plot = ttest_d_and_p_heatmap, path = paste0(plots.dir,"motifbreakr/disease_comparison/",cell_type), width=20,height=6)
+
+
+```
+
+
+## Comparison between cell types
+
+### set up 
+
+1. Create a data set with both primary t cell and jurkat motifbreakr enrichment values
+
+2. Filter the data to be present in either primary t cell or jurkat RNA-seq data
+
+```{r}
+ttest.unstim.jurkat.hocomoco <- read.table(paste0(data.dir,"motifbreakr/jurkat/","t.test.all.bind.motif.dat_unstim_jurkat_hocomoco.txt"), sep="\t", header=T)
+names(ttest.unstim.jurkat.hocomoco) <- c("tf", "unstim.jurkat.p", "unstim.jurkat.d", "unstim.jurkat.n", "unstim.jurkat.t","unstim.jurkat.df", "unstim.jurkat.mu1", "unstim.jurkat.sd1", "unstim.jurkat.mu0", "unstim.jurkat.sd0", "unstim.jurkat.max.p")
+
+ttest.tcell.hocomoco <- read.table(paste0(data.dir,"motifbreakr/tcell/","t.test.all.bind.motif.dat_tcell_hocomoco.txt"), sep="\t", header=T)
+names(ttest.tcell.hocomoco) <- c("tf","tcell.p","tcell.d","tcell.n", "tcell.t", "tcell.df", "tcell.mu1", "tcell.sd1", "tcell.mu0", "tcell.sd0","tcell.max.p")
+
+# Merge the ttest datasets using 
+ttest.all <- merge(ttest.unstim.jurkat.hocomoco,ttest.tcell.hocomoco, by="tf", all.y=TRUE,all.x=TRUE)
+
+# Import RNA-seq data
+# Importing dice gene expression data for primary CD4 tcells (activated)
+tcell_TPM <- read.csv(paste0(data.dir,"motifbreakr/","CD4_NAIVE_TPM.csv"), header=T)
+# Only the max TPM values
+tcell_TPM <- subset(tcell_TPM, select=c("Additional_annotations", "X0"))
+# Write the correct gene name
+tcell_TPM$Additional_annotations <- gsub(";protein_coding","",tcell_TPM$Additional_annotations)
+# Filter for over 1 TPM
+# Rename the columns to merge with the motif data
+names(tcell_TPM) <- c("tf","tcell_TPM")
+
+jurkatTPM <- read.table(paste0(data.dir,"motifbreakr/","GSE145453_norm_counts_TPM_GRCh38.p13_NCBI.tsv"), sep = '\t', header=T)
+annotateTPM <- read_excel(paste0(data.dir,"motifbreakr/","idmap.xlsx"))
+annotateTPM <- subset(annotateTPM, select=c(query,symbol))
+names(annotateTPM) <- c("GeneID","tf")
+jurkatTPM <- merge(jurkatTPM,annotateTPM, by="GeneID")
+jurkatTPM$unstim_jurkat_TPM <- pmax(jurkatTPM$GSM4318505,jurkatTPM$GSM4318506)
+jurkatTPM$stim_jurkat_TPM <- pmax(jurkatTPM$GSM4318507,jurkatTPM$GSM4318508)
+unstim_jurkat_TPM<- subset(jurkatTPM, select=c(tf,unstim_jurkat_TPM))
+stim_jurkat_TPM<- subset(jurkatTPM, select=c(tf,stim_jurkat_TPM))
+
+# APPLY RNA-seq data
+# Merge the rna-seq data for each cell type to the ttest data for all the cell types
+ttest.all.tf.TPM <- merge(ttest.all, tcell_TPM, by="tf", all.x=TRUE)
+ttest.all.tf.TPM <- merge(ttest.all.tf.TPM, unstim_jurkat_TPM, by="tf", all.x=TRUE)
+#ttest.all.tf.TPM <- merge(ttest.all.tf.TPM, stim_jurkat_TPM, by="tf", all.x=TRUE)
+# Subset the data so tfs in the data need to be listed in the data for all cell types (making this "or" in stead of "and" only adds 1 TF (BMAL1) which is NA in the tcell data)
+ttest.all.tf.TPM.filtered <- subset(ttest.all.tf.TPM, is.na(tcell_TPM)==FALSE & is.na(unstim_jurkat_TPM)==FALSE & is.na(stim_jurkat_TPM)==FALSE)
+# Subset the data so tfs in the data expressed in at least one cell type (making this "or" instead of "and" makes the number of tfs decrease the number of tfs)
+ttest.all.tf.TPM.filtered.twice <- subset(ttest.all.tf.TPM.filtered, tcell_TPM>=1 | unstim_jurkat_TPM>=1)
+```
+
+### plots
+
+Create plots to compare the p-values and effect sizes for tfs between primary tcells and unstimulated jurkat
+```{r}
+max(-log10(ttest.all.tf.TPM.filtered.twice$unstim.jurkat.p))
+max(-log10(ttest.all.tf.TPM.filtered.twice$tcell.p))
+
+# #5D93CD #E14A4A #5D93FF
+multicolor.ttest.d.tcell.unstim.jurkat.compare2 <- ggplot(data=ttest.all.tf.TPM.filtered.twice,aes(x=unstim.jurkat.d,y=tcell.d)) +
+ geom_hline(yintercept=0, color="black") + geom_vline(xintercept = 0, color="black") +
+  geom_point(aes(color=-log10(tcell.p),fill=-log10(unstim.jurkat.p)),size=3, shape = 21,stroke=1.5) +
+  scale_color_gradientn(colors=c("gray90","#E14A4A"),limits = c(0, 5.75)) +
+  # scale_size_continuous(range = c(2, 6)) +
+  scale_fill_gradientn(colors=c("gray90","#5D93CD"),limits = c(0, 5.75)) +
+  theme_bw() + geom_text_repel(aes(label=tf)) + 
+  labs(title ="Unstimulated Jurkat and Primary Tcell comparison", subtitle= "p-values and effect size derived from t-test of LogSkew and motifbreakr binding", caption="Hocomoco motif db", x ="Unstimulated Jurkat Effect size (d)", y = "Primary Tcell effect size (d)")
+multicolor.ttest.d.tcell.unstim.jurkat.compare2
+
+ggsave("multicolor2.rings2.effect.size.compare.plot.tcell.unstim.jurkat.pdf",plot = multicolor.ttest.d.tcell.unstim.jurkat.compare2, path = paste0(plots.dir,"motifbreakr"), width=7.5,height=5)
+```
+
+How many emVars disrupt key TFs?
+```{r}
+tcell_motifbreakr <- read.table(paste0(data.dir,"motifbreakr/tcell/","motif.mpra.dat_tcell_hocomoco.txt"), header=T, sep="\t")
+
+key_tfs <- c("NFKB1", "NFKB2", "RELB", "FOSB", "JUN", "GATA3", "STAT3", "STAT4","GFI1B")
+for(factor in key_tfs) {
+  single_tf <- subset(tcell_motifbreakr, geneSymbol==factor)
+n <- nrow(single_tf)
+emvars <- nrow(subset(single_tf, variant_skew=="emVar"))
+print(paste0("Out of a total of ",n, " variants which bind to ",factor, ", ", emvars, " are emVars."))
+}
+```
+
+
