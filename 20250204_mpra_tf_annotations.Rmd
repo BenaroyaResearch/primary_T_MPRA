@@ -1,0 +1,229 @@
+---
+title: "TF columns for MPRA data"
+output: html_document
+author: Max Dippel
+date: "2024-10-23"
+---
+
+The goal of this code is to create TF data which I can easily add to the big MPRA tables. 
+
+Load libraries
+```{r}
+library(readxl)
+library(readr)
+library(tidyverse)
+```
+
+Establish directories
+```{r}
+tf.dat.dir <- "~/Desktop/Ho et al. writings/Code_from_scratch2/data/tf/"
+data.dir <- "~/Desktop/Ho et al. writings/Code_from_scratch2/data/"
+tf.column.dir <- "/nfs/jray/screens/ALL_MPRAs/Ho_et_al_analysis/Downstream_Analysis/20240310_mpra_analysis/data/tf_columns_mpra_merge/"
+```
+
+###########
+Ananastra data for MPRA table
+###########
+
+ANnotation and enrichment ANalysis of Allele-Specific TRAnscription factor binding at SNPs (Ananastra) is a database which records allele specific transcription factor binding events. 
+
+Get the rsids for the MPRA library
+```{r}
+# Import MPRA from publicly available data (Mouri et al. 2022)
+mpra <- read_excel(paste0(data.dir,"41588_2022_1056_MOESM4_ESM.xlsx"),sheet=3)
+# Rename rsid columns because it got screwed up while importing the excel
+mpra$rsid <- mpra$rsid...2 
+# We only want the rsids
+mpra_rsid <- subset(mpra, select=c(rsid))
+# write out the list of rsids
+write.table(mpra_rsid,paste0(tf.dat.dir,"mpra_rsid.txt"), row.names=F, col.names=F, sep="\t", quote=F)
+# read back in the list of rsids
+mpra_rsid <- read.table(paste0(tf.dat.dir,"mpra_rsid.txt"), sep="\t", header=T)
+```
+
+Put the rsids into this website. https://ananastra.autosome.org/ 
+You cannot do over 10000 at one time and we have 18000 variants, so I suggest doing 9000 and 9000. It actually takes a while to process that many SNP. I used the default settings. 
+Download the table in the transcription factors tab:
+ex. ananastra_billcipher_7y1kzw42.tf.tsv
+
+Create an Ananastra column for MPRA data
+```{r}
+# Import the two ananastra datasets (there are two because I had to split the Rsids into two groups)
+ananastra1 <- readr::read_tsv(paste0(tf.dat.dir, "ananastra_billcipher_7y1kzw42.tf.tsv"))
+ananastra2 <- readr::read_tsv(paste0(tf.dat.dir, "ananastra_billcipher_6dxy9h35.tf.tsv"))
+# Join the two two ananastra data
+ananastra <- rbind(ananastra1,ananastra2)
+# 1433 rows (performed in 2024)
+ananastra$rsid <- ananastra$rs_id
+# Subset the ananastra columns
+ananastra <- subset(ananastra,select=c(chromosome,position,ref,alt,rsid,transcription_factor,finemapping))
+# Get rid of the tf suffix 
+ananastra$transcription_factor <- sub("_HUMAN","",ananastra$transcription_factor)
+
+# Create hg38 SNP column for the MPRA to be able to merge with the motifbrerakr info
+hg_liftover <- read.table(paste0(data.dir,"mpra_snps.hg38_liftover.txt"), sep="\t", header=T)
+# Get rid of the word "chr" in the chromosome column, so only the number remains
+hg38_liftover_chr_mod <- gsub("chr", "", hg_liftover$chr)
+# Get rid of the numbers on the snpid_hg19 to be left with the alleles
+hg38_liftover_id_mod <- gsub("[0-9]+", "", hg_liftover$snpid_hg19)
+# Get rid of double colon
+hg38_liftover_id_mod <- gsub("::", ":", hg38_liftover_id_mod)
+# create the SNP ID out of all the pieces you just created
+hg_liftover$SNP38 <- paste0(hg38_liftover_chr_mod,":",hg_liftover$pos_hg38,hg38_liftover_id_mod)
+# Make a new column with a better name
+hg_liftover$SNP <- hg_liftover$snpid_hg19
+# Make a new column with a new name again
+mpra$SNP19 <- mpra$SNP
+# merge the MPRA with the human genom eliftover data
+mpra<-merge(mpra,hg_liftover, by="SNP", all.x=T, all.y=T)
+# Eliminate any duplicated SNPs (sanity check)
+mpra<-mpra[!duplicated(mpra$SNP),]
+# subset to only the SNP names 
+mpra_coordinates <- subset(mpra, select=c(rsid,SNP38,SNP19))
+
+# Merge the ananastra data with the mpra data
+ananastra_mpra_table <- merge(mpra_coordinates,ananastra, by="rsid")
+
+###########
+# Make sure position and alleles for ananastra and MPRA are the same 
+###########
+
+# Let's start with position
+# Rename the columns 
+ananastra_mpra_table$ananastra_pos <- ananastra_mpra_table$position
+# Extract the position from the SNP
+ananastra_mpra_table$mpra_pos <- sub("^[^:]+:([^:]+):.*$", "\\1", ananastra_mpra_table$SNP38)
+# Create a column with a 1 when the ananastra and mpra positions match 
+ananastra_mpra_table$pos_agree <- NA # create an empty column
+ananastra_mpra_table$pos_agree <- as.integer(ananastra_mpra_table$ananastra_pos == ananastra_mpra_table$mpra_pos) # Create the column with 1 and 0
+# Subset to only variants in which the position in the MPRA and ananastra match
+ananastra_mpra_table  <- subset(ananastra_mpra_table, pos_agree==1)
+# No variants lost
+
+# Make sure reference alleles for Ananastra and MPRA are the same 
+# Rename the columns 
+ananastra_mpra_table$ananastra_ref <- ananastra_mpra_table$ref
+# Extract the reference allele from the SNP column
+ananastra_mpra_table$mpra_ref <- sub("^[^:]+:[^:]+:([^:]+):.*$", "\\1", ananastra_mpra_table$SNP38)
+# Create a column with a 1 when the ananastra and mpra alleles match 
+ananastra_mpra_table$ref_agree <- NA # create an empty column
+ananastra_mpra_table$ref_agree <- as.integer(ananastra_mpra_table$ananastra_ref == ananastra_mpra_table$mpra_ref) # Create the column with 1 and 0
+# Subset to only variants in which the reference allele in the MPRA and ananastra match
+ananastra_mpra_table  <- subset(ananastra_mpra_table, ref_agree==1)
+# Lost 6 variants
+
+# Make sure alternate alleles for Ananastra and MPRA are the same 
+# Rename the columns 
+ananastra_mpra_table$ananastra_alt <- ananastra_mpra_table$alt
+# Extract the alternate allele
+ananastra_mpra_table$mpra_alt <- sub("^[^:]+:[^:]+:[^:]+:([^:]+)$", "\\1", ananastra_mpra_table$SNP38)
+# Create a column with a 1 when the ananastra and mpra alleles match 
+ananastra_mpra_table$alt_agree <- NA # create an empty column
+ananastra_mpra_table$alt_agree <- as.integer(ananastra_mpra_table$ananastra_alt == ananastra_mpra_table$mpra_alt) # Create the column with 1 and 0
+# Subset to only variants in which the alternate allele in the MPRA and ananastra match
+ananastra_mpra_table  <- subset(ananastra_mpra_table, alt_agree==1)
+# Lost no variants
+
+# Subset to only the columns you need
+ananastra.data.for.mpra <- subset(ananastra_mpra_table, select=c(SNP19,transcription_factor))
+
+# Reorganize the data so that there is only one column per SNP and the TFs are in one column separated by commas
+ananastra.data.for.mpra <- ananastra.data.for.mpra %>%
+  group_by(SNP19) %>%
+  summarise(ananastra_tf = toString(transcription_factor)) %>%
+  ungroup()
+# Write the table you will use to create the Ananastra column 
+write.table(ananastra.data.for.mpra,paste0(tf.dat.dir,"ananastra_data_for_mpra_hg19.txt"), row.names=F, col.names=T, sep="\t", quote=F)
+```
+
+############
+MotifbreakR data for MPRA table
+###########
+
+Create motifbreakR column for mpra
+```{r}
+# Import motif data. This is created in the motifbreakr enrichment analysis. I am including the data here so that I can make this column in the big table, even though I use the big table to make the motifbreakr results. This little paradox helps simplify the code a lot, and you can see the raw data I got from motifbreakR. 
+motifbreakr_dir <- paste0(data.dir,"motifbreakr/","2023.11.15.hg38.tcells.glm.all.snps.hocomoco.bed",".motifbreakr.results.txt")
+motif.dat <- read.table(motifbreakr_dir, sep="\t", header=T)
+
+# Import  MPRA data. This will have more variants are in the final MPRA table but that's fine because I am only using this to merge a single column into the big table and we are only going to be using the appropriate columns for that. 
+mpra <- read.table(paste0(data.dir,"OLJR.C_Tcell_emVAR_glm_20240310.out"), sep="\t", header=T)
+mpra <- subset(mpra, select=c(SNP,ref_allele,alt_allele)) # Subset to only the columns you need
+# Create hg38 SNP column for the MPRA to be able to merge with the motifbrerakr info
+hg_liftover <- read.table(paste0(data.dir,"mpra_snps.hg38_liftover.txt"), sep="\t", header=T)
+# Get rid of the word "chr" in the chromosome column, so only the number remains
+hg38_liftover_chr_mod <- gsub("chr", "", hg_liftover$chr)
+# Get rid of the numbers on the snpid_hg19 to be left with the alleles
+hg38_liftover_id_mod <- gsub("[0-9]+", "", hg_liftover$snpid_hg19)
+# Get rid of double colon
+hg38_liftover_id_mod <- gsub("::", ":", hg38_liftover_id_mod)
+# create the SNP ID out of all the pieces you just created
+hg_liftover$SNP38 <- paste0(hg38_liftover_chr_mod,":",hg_liftover$pos_hg38,hg38_liftover_id_mod)
+# Create a new column with a better name 
+hg_liftover$SNP <- hg_liftover$snpid_hg19
+# Merge the MPRA and hg liftover information so you have 
+mpra<-merge(mpra,hg_liftover, by="SNP", all.x=T, all.y=T)
+# get rid of duplicated SNPs (sanity check)
+mpra<-mpra[!duplicated(mpra$SNP),]
+
+# Makes geneSymbol (TF name) all uppercase
+motif.dat$geneSymbol <- toupper(motif.dat$geneSymbol)
+# make geneSymbol (TF Name) change from slash / to underscore so that the plots can save
+motif.dat$geneSymbol <- gsub("/","_",motif.dat$geneSymbol)
+
+# Subset the motif data
+motif.dat<-subset(motif.dat,  select=c(seqnames, end, REF, ALT,SNP_id, geneSymbol,alleleDiff))
+
+######## code for merging mpra and motifbreakr by chromosome and position ########
+# Get rid of the chr in motifbreakr SNP_id column to conform with mpra SNP column
+motif.dat$SNP38 <- gsub("chr","",motif.dat$SNP_id)
+# Merge Motifbreakr and MPRA ( we expect a similar number to the 61570 that are in the motif.dat right now (example run not represenative of all runs))
+motif.mpra.dat<-merge(motif.dat, mpra, by="SNP38", all.x=T, all.y=T)
+
+# Make sure alleles for Motifbreakr and MPRA are the same 
+# Rename the columns 
+motif.mpra.dat$motifbreakr_ref <- motif.mpra.dat$REF
+motif.mpra.dat$mpra_ref <- motif.mpra.dat$ref_allele
+# Create a column with a 1 when the motifbreakr and mpra alleles match 
+motif.mpra.dat$ref_agree <- NA # create an empty column
+motif.mpra.dat$ref_agree <- as.integer(motif.mpra.dat$motifbreakr_ref == motif.mpra.dat$mpra_ref) # Create the column with 1 and 0
+# Subset to only variants in which the reference allele in the MPRA and motifbreakr match
+motif.mpra.dat <- subset(motif.mpra.dat, ref_agree==1)
+
+# Make sure alleles for Motifbreakr and MPRA are the same 
+# Rename the columns 
+motif.mpra.dat$motifbreakr_alt <- motif.mpra.dat$ALT
+motif.mpra.dat$mpra_alt <- motif.mpra.dat$alt_allele
+# Create a column with a 1 when the motifbreakr and mpra alleles match
+motif.mpra.dat$alt_agree <- NA # create an empty column
+motif.mpra.dat$alt_agree <- as.integer(motif.mpra.dat$motifbreakr_alt == motif.mpra.dat$mpra_alt) # Create the column with 1 and 0
+# Subset to only variants in which the alternate allele in the MPRA and motifbreakr match
+motif.mpra.dat <- subset(motif.mpra.dat, alt_agree==1)
+
+# Add back in the variants without motifbreakr alleles
+motif.mpra.dat<-merge(motif.mpra.dat, mpra, by=names(mpra), all.x=T, all.y=T)
+
+# Generate unique MPRA sites (Each column is a unique TF and SNP combination)
+motif.mpra.dat$unique_snp_tf <- paste0(motif.mpra.dat$seqnames,":",motif.mpra.dat$end,":",
+                                    motif.mpra.dat$REF,":",motif.mpra.dat$ALT,"_",motif.mpra.dat$geneSymbol)
+# Order table of TF and SNP combinations by the motifbreakR allele diff value (the difference between the binding score of the reference and alternate allele)
+motif.mpra.dat<-motif.mpra.dat[order(-abs(motif.mpra.dat$alleleDiff)),]
+# Eliminate duplicate SNP TF combinations (you are keeping the strongest score for every SNP TF combination)
+motif.mpra.dat<-motif.mpra.dat[!duplicated(motif.mpra.dat$unique_snp_tf),]
+
+################################################################################
+
+# Subet to only the columns you need
+motifbreakr.data.for.mpra <- subset(motif.mpra.dat, select=c(SNP,geneSymbol))
+
+# Reorganize the data so that there is only one column per SNP and the TFs are in one column separated by commas
+motifbreakr.data.for.mpra <- motifbreakr.data.for.mpra %>%
+  group_by(SNP=SNP) %>%
+  summarise(motifbreakr_tf_2024 = toString(geneSymbol)) %>%
+  ungroup()
+# Write table
+write.table(motifbreakr.data.for.mpra,paste0(tf.dat.dir,"motifbreakr_data_for_mpra_hg19.txt"), row.names=F, col.names=T, sep="\t", quote=F)
+```
+
+
+
