@@ -1,0 +1,40 @@
+---
+title: "Eliminate SNP"
+output: html_document
+author: Max Dippel
+date: "2024-03-10"
+---
+
+This is the code to eliminate the SNP in the .out files that is not associated with any of the diseases in the study. 
+
+The .out files were located in this directory /nfs/jray/screens/ALL_MPRAs/Ho_et_al_analysis/Primary_Data/20240310_analysis/results
+
+I have eliminated the SNP 3:189662658:GT:G (hg19) aka. rs5855282 from these files: 
+
+OLJR.C_Tcell_emVAR_glm_20240310.out
+OLJR.A_Jurkat_emVAR_glm_20240310.out
+
+I have already done this so you don't have to run this again if you are using the github data. However, if you have 18326 variants in your results, this will reduce it to 18325. 
+
+Establish directories
+```{r}
+tables.dir <- "/nfs/jray/screens/ALL_MPRAs/Ho_et_al_analysis/Primary_Data/20240310_analysis/results/"
+```
+
+Primary T-cell MPRA
+```{r}
+table1 <- read.table(paste0(tables.dir, "OLJR.C_Tcell_emVAR_glm_20240310.out"), sep="\t", header=T)
+
+table1 <- table1[table1$SNP != "3:189662658:GT:G",]
+
+write.table(table1, paste0(tables.dir, "OLJR.C_Tcell_emVAR_glm_20240310.out"), row.names=F, col.names=T, sep="\t", quote=F)
+```
+
+Jurkat MPRA
+```{r}
+table2 <- read.table(paste0(tables.dir, "OLJR.A_Jurkat_emVAR_glm_20240310.out"), sep="\t", header=T)
+
+table2 <- table2[table2$SNP != "3:189662658:GT:G",]
+
+write.table(table2, paste0(tables.dir, "OLJR.A_Jurkat_emVAR_glm_20240310.out"), row.names=F, col.names=T, sep="\t", quote=F)
+```
