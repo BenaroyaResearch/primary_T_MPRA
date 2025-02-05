@@ -29,4 +29,4 @@ The annotate file in the GEO data set Human.GRCh38.p13.annot.tsv did not have th
 
 https://www.syngoportal.org/convert
 
-This takes a long time but the results will be worth it. Use NCBI entrez Gene 
+This takes a long time but the results will be worth it. Use NCBI entrez Gene. I have included the gene ID map if you want to skip this step. 
