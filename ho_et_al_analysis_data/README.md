@@ -1,1 +1,26 @@
+# Ho et al. MPRA analysis
 
+Hello! Welcome to the MPRA analysis code for Ho et al. 2025
+
+This folder contains data necessary for the MPRA analysis in Ho et al. 2025. There are 9 steps to this analysis which must be done in order. The CRISPR and V2G analyses are separate. 
+
+Order of operations:
+1. eliminate_SNP.rmd 
+ - Use this to eliminate a SNP which isn't associated with any diseases in the study (I already elimianted this SNP from the jurkat and t-cell files)
+2. mpra_tf_annotations.Rmd
+  - Use this to make some columns for the MPRA big table.
+3. tcell_mpra_big_table.Rmd 
+  - Use this to create a big table for the primary t-cell MPRA. To create all the plots in the other code files below this you need this table.
+4. jurkat_mpra_big_table.Rmd 
+ - Use this to create a big table for the jurkat MPRA. To create all the plots in the other code files below this you need this table.
+5. mpra_DHS_grid_search.Rmd
+ - This code will analyse the enrichment for DHS sites for high activity variants and create Supp. figure 2 c & d and supp. tables 32 & 33
+ - If you're doing your own MPRA use this to calibrate the variant category filter aka. the mpra_sig column (made in mpra_big_table.Rmd). My code will have the variant category filters for Ho et al., but you can calculate your own!
+6. UK_biobank_finemapping_enrichment.Rmd 
+  - Use this to create the UKBB finemapping emVar enrichment plots in Supp. figure 5.
+7. mpra_plots.Rmd
+ - Use this to create most of the MPRA plots (figure 1 b-f, supp. figure 3 & 4)
+8. motifbeakr_enrichment_analysis.Rmd
+ - This code is used to calculate the TF motif enrichments for MPRA variants and create the relevant plots. (Figure 2, Supp. figure 6)
+9. mpra_supplementary_tables
+ - Use this to create many of the supplementary tables (not including anything having to do with CRISPR or V2G)
