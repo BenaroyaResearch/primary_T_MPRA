@@ -1,8 +1,8 @@
-# Ho et al. MPRA analysis
+# Ho et al. analysis code
 
-Hello! Welcome to the MPRA analysis code for Ho et al. 2025
+Hello! Welcome to the analysis code for Ho et al. 2025
 
-This folder contains data necessary for the MPRA analysis in Ho et al. 2025. There are 9 steps to this analysis which must be done in order. The CRISPR and V2G analyses are separate (steps 10 and 11)
+This folder contains data necessary for the MPRA analysis in Ho et al. 2025. There are 9 steps to the MPRA analysis which must be done in order. The CRISPR and V2G analyses are separate (steps 10 and 11)
 
 Order of operations:
 
@@ -45,9 +45,13 @@ Finally using all the tables which are relevant to the MPRA data created so far,
 This Jupyter notebook generates variant-to-gene (V2G) mapping for rsIDs of interest. Key steps include:
 
 Converting rsIDs to variant IDs using genopyc
+
 Mapping variants to genes with the V2G otargen pipeline
+
 Processing T cell expression data from the DICE database
+
 Filtering V2G output based on cell-specific expression
+
 Creating background and foreground datasets for network analysis
 
 Requires Python (pandas, genopyc, polars) and R (otargen, purrr, dplyr, readr) libraries. Outputs include filtered V2G data and gene sets for further analysis.
