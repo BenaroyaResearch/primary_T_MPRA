@@ -21,7 +21,21 @@ Order of operations:
 7. mpra_plots.Rmd
  - Use this to create most of the MPRA plots (figure 1 b-f, supp. figure 3 & 4)
 8. motifbeakr_enrichment_analysis.Rmd
- - This code is used to calculate the TF motif enrichments for MPRA variants and create the relevant plots. (Figure 2, Supp. figure 6)
+This code is used to calculate the TF motif enrichments for MPRA variants and create the relevant plots. (Figure 2, Supp. figure 6). This code contains the transcription factor binding analysis of the MPRA data. The steps to this analysis include: 
+1. Create a Granges bed file of the variants mpra tested in the MPRA
+2. Run motifbreakR function to generate TF binding data on the MPRA variants
+3. Merge motifbreakr and MPRA data
+
+4. Run t-test of primary T cell MPRA expression of variants which do and do not bind to each tf 
+
+5. Repeat step 4 with jurkat mpra expression data
+
+6. Run t-test analysis for variants fine mapped to each disease
+
+7. Merge the primary tcell and unstimulated jurkat data
+
+8. Compare the results of jurkat and primary T cells
+
 9. mpra_supplementary_tables
  - Use this to create many of the supplementary tables (not including anything having to do with CRISPR or V2G)
 
