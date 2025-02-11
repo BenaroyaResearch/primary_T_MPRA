@@ -8,11 +8,11 @@ Order of operations:
 
 ### 1. eliminate_SNP.rmd 
 
-Use this to eliminate a SNP which isn't associated with any diseases in the study (I already elimianted this SNP from the jurkat and t-cell files)
+Use this to eliminate a SNP which isn't associated with any diseases in the study (I already elimianted these SNPs from the jurkat and t-cell files)
 
 ### 2. mpra_tf_annotations.Rmd
 
-Use this to make some columns for the MPRA big table. This code incorporates data two TF binding site programs, motifbreakR and Ananastra. 
+Use this to make some columns for the MPRA big table. This code incorporates data to TF binding site programs, motifbreakR and Ananastra. 
 ### 3. tcell_mpra_big_table.Rmd 
 
 Use this to create a big table for the primary t-cell MPRA. This code takes the basic MPRA information and contextualize it with linkage disequillirium, epigenetic and transcription factor binding data. I incorporated human genome liftover data to have seperate hg19 and 38 tables. To create all the plots in the other code files below this you need this table.
