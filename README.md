@@ -12,21 +12,23 @@ Use this to eliminate a SNP which isn't associated with any diseases in the stud
 
 ### 2. mpra_tf_annotations.Rmd
 
-Use this to make some columns for the MPRA big table. This code incorporates data to TF binding site programs, motifbreakR and Ananastra. 
+Use this to make some columns for the MPRA big table. This code incorporates data with TF binding site programs, motifbreakR and Ananastra. 
+
 ### 3. tcell_mpra_big_table.Rmd 
 
-Use this to create a big table for the primary t-cell MPRA. This code takes the basic MPRA information and contextualize it with linkage disequillirium, epigenetic and transcription factor binding data. I incorporated human genome liftover data to have seperate hg19 and 38 tables. To create all the plots in the other code files below this you need this table.
+Use this to create a big table for the primary t-cell MPRA. This code takes the basic MPRA information and contextualizes it with linkage disequillirium, epigenetic and transcription factor binding data. Human genome liftover data is incorporated to have seperate hg19 and 38 tables. To create all the plots in the other code files below this you need this table.
+
 ### 4. jurkat_mpra_big_table.Rmd 
 
 Use this to create a big table for the jurkat MPRA. To create all the plots in the other code files below this you need this table.
 
 ### 5. mpra_DHS_grid_search.Rmd
 
-This code will analyse the enrichment for DHS sites for high activity variants and is used to estimate the cut-offs for high activity variants (p-CREs) and allelic-specific expression variants (emVars). It will create Supp. figure 2 c & d and supp. tables 32 & 33. If you're doing your own MPRA use this to calibrate the variant category filter aka. the mpra_sig column (made in mpra_big_table.Rmd). My code will have the variant category filters for Ho et al., but you can calculate your own!
+This code will analyse the enrichment for DHS sites for high activity variants and is used to estimate the cut-offs for high activity variants (p-CREs) and allelic-specific expression variants (emVars). It will create Supp. figure 2 c & d and supp. tables 32 & 33. If you're doing your own MPRA use this to calibrate the variant category filter aka. the mpra_sig column (made in mpra_big_table.Rmd). This code will have the variant category filters for Ho et al., but you can calculate your own!
 
 ### 6. UK_biobank_finemapping_enrichment.Rmd
 
-Use this to create the UKBB finemapping emVar enrichment plots in Supp. figure 5.
+Use this to create the UKBB finemapping enrichment plots in Supp. figure 5.
 
 ### 7. mpra_plots.Rmd
 
