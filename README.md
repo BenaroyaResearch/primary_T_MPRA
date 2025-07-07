@@ -2,6 +2,10 @@
 
 Hello! Welcome to the analysis code for Ho et al. 2025
 
+The code can also be found at these links:
+https://zenodo.org/records/15831587 
+https://doi.org/10.5281/zenodo.15831587 
+
 This folder contains data necessary for the MPRA analysis in Ho et al. 2025. There are 9 steps to the MPRA analysis which must be done in order. The CRISPR and V2G analyses are separate (steps 10 and 11)
 
 Order of operations:
